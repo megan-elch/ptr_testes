@@ -8,7 +8,7 @@ output: pdf_document
 ```{r setup, include=FALSE, cache.lazy = FALSE}
 knitr::opts_chunk$set(echo = TRUE)
 library(AnnotationDbi)
-library(org.Hs.eg.db)
+library(org.Hs.eg.db) 
 library(GO.db)
 library(tidyverse)
 source("scripts/plot_functions.R")

@@ -190,6 +190,16 @@ ggsave(plot = d[[2]][[2]], filename = "figs_results/fig2_d4.pdf",
 load("processed_data/protein_consistency.RData")
 load("processed_data/prepped_data.RData")
 
+# load complex level posterior correlations
+load("model_output/complex_correlations.RData")
+# load complexes and associated UNIPROT IDs
+complex_uni =  read_delim("processed_data/coreComplexes.txt", 
+    delim = "\t", escape_double = FALSE, 
+    trim_ws = TRUE)
+complex_uni = complex_uni %>% 
+  dplyr::group_by(ComplexName) %>% 
+  dplyr::reframe(UNIPROT = unlist(strsplit(`subunits(UniProt IDs)`, ";", fixed = T)))
+
 # compute median protein consistency across data sets 
 group_ref = protein_reliability %>%
   stats::na.omit() %>%
@@ -228,16 +238,6 @@ protein_point = cor_df_prot %>%
   # compute average reliability across subunits of complex
   dplyr::group_by(ComplexName) %>%
   dplyr::summarise(reliability = mean(reliability, na.rm = T))
-
-# load complex level posterior correlations
-load("model_output/complex_correlations.RData")
-# load complexes and associated UNIPROT IDs
-complex_uni =  read_delim("processed_data/coreComplexes.txt", 
-    delim = "\t", escape_double = FALSE, 
-    trim_ws = TRUE)
-complex_uni = complex_uni %>% 
-  dplyr::group_by(ComplexName) %>% 
-  dplyr::reframe(UNIPROT = unlist(strsplit(`subunits(UniProt IDs)`, ";", fixed = T)))
 
 # identify proportion of UNIPROT IDs assigned to each complex that are actually observed
 uni_rec = complex_uni %>% merge(gene_res, all.x = T) %>% dplyr::group_by(ComplexName) %>% dplyr::summarise(n_uni = length(unique(UNIPROT[is.finite(significant)])), n_uni_big = length(unique(UNIPROT)), prop_rep = n_uni/n_uni_big)
