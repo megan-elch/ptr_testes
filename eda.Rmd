@@ -1,0 +1,313 @@
+---
+title: "Exploratory Data Analysis"
+author: "Megan Elcheikhali, (Slavov/Franks Labs)"
+date: "`r Sys.Date()`"
+output: pdf_document
+---
+
+```{r setup, include=FALSE, cache.lazy = FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+library(AnnotationDbi)
+library(org.Hs.eg.db)
+library(GO.db)
+library(tidyverse)
+library(patchwork)
+source("scripts/plot_functions.R")
+source("scripts/go_functions.R")
+clusters = c("EC", "PTM", "LC", "SPG", "SPC", "St")
+
+mrna_color = "#B2182B"
+protein_color = "#2166AC"
+multi_colors = "lightgray"
+
+text_size = 100
+```
+
+```{r fig1, echo = FALSE, warning = FALSE, message = FALSE, fig.width = 40, fig.height = 25, cache = T}
+# load prepared data 
+load("processed_data/prepped_data.RData")
+mrna_keys = prep_list$protein %>% pull(UNIPROT) %>% unique()
+mrna_ref = AnnotationDbi::select(org.Hs.eg.db, keys = mrna_keys, keytype ="UNIPROT", columns = "SYMBOL")
+```
+
+```{r fig1, echo = FALSE, warning = FALSE, message = FALSE, fig.width = 30, fig.height = 30, cache = F, eval = T}
+####################################################################################################################################### 
+#                                                 Compute protein consistency 
+####################################################################################################################################### 
+
+# load previously computed protein consistency
+load("processed_data/protein_consistency.RData")
+group_ref = protein_reliability %>%
+  stats::na.omit() %>%
+  dplyr::group_by(UNIPROT) %>%
+  # compute average and maximum consistency across data sets
+  dplyr::summarise(rel_av = mean(reliability, na.rm = T),
+                   rel_max = max(reliability, na.rm = T)) %>%
+  ungroup() 
+protein_reliability = protein_reliability %>% merge(group_ref)
+
+####################################################################################################################################### 
+#                                                  Compute data set agreement 
+####################################################################################################################################### 
+
+# z-transform observed protein in order to compute data set agreement
+cor_df_prot_z = prep_list$protein %>%
+  dplyr::group_by(UNIPROT, ct, measure) %>%
+  dplyr::summarise(a_av = mean(pep_av, na.rm = T)) %>%
+  ungroup() %>%
+  dplyr::group_by(UNIPROT, measure) %>% # compute average for each gene, measurement type
+  dplyr::mutate(a_av = scale(a_av)[,1],
+                pop_a = measure) %>%
+  dplyr::select(-measure) %>%
+  ungroup()
+
+# compute across clusters correlation for each pair of data sets
+cor_df_prot = cor_df_prot_z %>%
+  merge(transmute(cor_df_prot_z, UNIPROT = UNIPROT, ct = ct, b_av = a_av, pop_b = pop_a)) %>%
+  filter(pop_a != pop_b) %>% # prevent correlating each data set with itself
+  dplyr::group_by(UNIPROT, pop_a, pop_b) %>%
+  dplyr::summarise(cors = cor(a_av, b_av, use = "pairwise.complete.obs"))
+
+# z-transform observed mrna fold changes
+mrna_cor_df_z = prep_list$mrna %>%
+  dplyr::group_by(UNIPROT, ct, pop_mrna) %>%
+  dplyr::summarise(scaled_counts = mrna_sum/counts) %>%
+  ungroup() %>%
+  dplyr::group_by(UNIPROT, pop_mrna) %>%
+  dplyr::reframe(a_av = scale(log2(scaled_counts + 0.0001))[,1], ct = ct) %>%
+  ungroup() %>%
+  dplyr::mutate(pop_a = ifelse(pop_mrna %in% c("Pop1", "Pop2"), "10x", "dropseq"))
+  
+# correlate mrna fold changes for each pair of data sets 
+mrna_cor_df = mrna_cor_df_z %>%
+  merge(transmute(mrna_cor_df_z, UNIPROT = UNIPROT, ct = ct, b_av = a_av, pop_b = pop_a, pop_mrna_b = pop_mrna)) %>%
+  filter(pop_a != pop_b) %>% # prevent correlating data sets with themselves
+  dplyr::group_by(UNIPROT, pop_mrna_b, pop_mrna) %>%
+  dplyr::summarise(cors = cor(a_av, b_av, use = "pairwise.complete.obs"),
+                   pop_a = unique(pop_a),
+                   pop_b = unique(pop_b)) %>%
+  ungroup() 
+
+# compute across modality correlation
+cor_df_multi = mrna_cor_df_z %>%
+  merge(transmute(cor_df_prot_z, UNIPROT = UNIPROT, ct = ct, b_av = a_av, pop_b = pop_a)) %>%
+  dplyr::group_by(UNIPROT, pop_a, pop_b) %>%
+  dplyr::summarise(cors = cor(a_av, b_av, use = "pairwise.complete.obs"))
+
+# make two versions of protein data set agreement:
+# all proteins
+protein_point2 = cor_df_prot %>% 
+  dplyr::transmute(cors = cors, UNIPROT = UNIPROT) %>%
+  ungroup() 
+# proteins that also have protein consistency observed (2+ peptides)
+protein_point = protein_point2 %>%
+  merge(group_ref) %>% mutate(var = "lines")
+
+# mrna data set agreement: all genes
+mrna_point2 = mrna_cor_df %>% 
+  dplyr::transmute(mrna_cors = cors, UNIPROT = UNIPROT) %>%
+  ungroup() 
+# mrna data set agreement: genes corresponding to proteins with two or more peptides
+mrna_point = mrna_point2 %>%
+  merge(group_ref) %>% mutate(var = "lines")
+
+# across modality data set agreement: all gene products
+multi_point2 = cor_df_multi %>% 
+  dplyr::transmute(multi_cors = cors, UNIPROT = UNIPROT) %>%
+  ungroup() 
+# gene products with protein consistency observed
+multi_point = multi_point2 %>%
+  merge(group_ref) %>% mutate(var = "lines")
+
+# combine data set agreements for all gene products
+rel_single = transmute(protein_point2, cors = cors, mod = "Between Protein Data Sets", UNIPROT = UNIPROT) %>% 
+  rbind(transmute(multi_point2, cors = multi_cors, mod = "Between Modalities", UNIPROT = UNIPROT)) %>%
+  rbind(transmute(mrna_point2, cors = mrna_cors, mod = "Between mRNA Data Sets", UNIPROT = UNIPROT)) 
+
+# average across gene products
+rel_df_summary = rel_single %>% dplyr::group_by(mod) %>% 
+  dplyr::summarise(rel_single = mean(cors, na.rm = T), var = "points")
+
+####################################################################################################################################### 
+#                                              Plot protein consistency and data set agreement 
+####################################################################################################################################### 
+
+across_color = RColorBrewer::brewer.pal(12, name = "Paired")[10]
+across_color_new = RColorBrewer::brewer.pal(12, name = "Paired")[9]
+mrna_across_color = RColorBrewer::brewer.pal(11, name = "PiYG")[1]
+
+uni_point = intersect(protein_point$UNIPROT, mrna_point$UNIPROT) %>% intersect(multi_point$UNIPROT)
+
+# for each data set agreement df, average protein consistency and data set agreement across data sets/pairs of data sets
+protein_point = filter(protein_point, UNIPROT %in% uni_point) %>% dplyr::group_by(UNIPROT) %>% 
+  dplyr::summarise(rel_av = mean(rel_av, na.rm = T),
+                   cors = mean(cors, na.rm = T))
+mrna_point = filter(mrna_point, UNIPROT %in% uni_point) %>% dplyr::group_by(UNIPROT) %>% 
+  dplyr::summarise(rel_av = mean(rel_av, na.rm = T),
+                   mrna_cors = mean(mrna_cors, na.rm = T))
+multi_point = filter(multi_point, UNIPROT %in% uni_point) %>% dplyr::group_by(UNIPROT) %>% 
+  dplyr::summarise(rel_av = mean(rel_av, na.rm = T),
+                   multi_cors = mean(multi_cors, na.rm = T))
+
+# draw plot
+g1 = ggplot() +
+  geom_smooth(data = protein_point, mapping = aes(x = percent_rank(rel_av), y = cors, 
+                            fill = "Between Protein Data Sets", color = "Between Protein Data Sets"), linewidth = 6) +
+  geom_smooth(data = mrna_point, mapping = aes(x = percent_rank(rel_av), y = mrna_cors, 
+                            fill = "Between mRNA Data Sets", color = "Between mRNA Data Sets"), linewidth = 6) +
+  geom_smooth(data = multi_point, mapping = aes(x = percent_rank(rel_av), y = multi_cors, 
+                            fill = "Between Modalities", color = "Between Modalities"), linewidth = 6) +
+  scale_x_continuous(expand = c(0.02, 0.02)) +
+  scale_y_continuous(expand = c(0, 0)) +
+  scale_fill_manual(name = "", values = c(across_color, mrna_color, protein_color)) +
+  scale_color_manual(name = "", values = c(across_color, mrna_color, protein_color)) +
+  xlab("Protein Consistency Percent Rank (n > 1)") +
+  ylab("Data Set Agreement") +
+  theme(text = element_text(size = text_size),
+        axis.text = element_text(size = text_size),
+        panel.spacing = unit(50, "pt"),
+        legend.key.size = unit(5, "cm"),
+        legend.position="none",
+        legend.text = element_text(margin = margin(r = 3, unit="inch"), size = text_size),
+        panel.background = element_rect(fill = 'white', color = "slategray4"),
+        panel.grid.major = element_line(color = 'slategray2'),
+        panel.grid.minor = element_line(color = 'slategray1'))
+
+ggsave(plot = g1, filename = "figs_results/replicability1.pdf", width = 40, height = 30, units = "in", limitsize = F)
+
+# get limits to be the same for both plot
+lim_set = ggplot_build(g1)$layout$panel_params[[1]]$y.range
+
+# draw plot showing average for all proteins (including those with only one peptide observed)
+g2 = ggplot() +
+  geom_point(data = rel_df_summary, aes(x = "All", y = rel_single, color = mod, fill = mod),
+             size = 50, shape = 19, stroke = 5) +
+  xlab("") +
+  ylab("") +
+  scale_color_manual(name = "", values = c(across_color, mrna_color, protein_color)) +
+  scale_y_continuous(breaks = c(0, 0.2, 0.4, 0.6),
+                     minor_breaks = c(0, 0.1, 0.2, 0.3, 0.4, 0.5, 0.6, 0.7),
+                     limits = c(lim_set[1], lim_set[2]),
+                     expand = c(0, 0)) +
+  theme(text = element_text(size = text_size),
+        axis.text.x = element_text(size = text_size),
+        axis.text.y = element_blank(),
+        panel.spacing = unit(50, "pt"),
+        legend.position = "none",
+        panel.background = element_rect(fill = 'white', color = "slategray4"),
+        panel.grid.major = element_line(color = 'slategray2'),
+        panel.grid.minor = element_line(color = 'slategray1')) +
+  expand_limits(y = c(lim_set[1], lim_set[2]))
+
+ggsave(plot = g2, filename = "figs_results/replicability2.pdf", width = 5, height = 30, units = "in", limitsize = F)
+```
+
+```{r fig2, echo = FALSE, warning = FALSE, message = FALSE, fig.width = 30, fig.height = 15, cache = F, eval = T}
+####################################################################################################################################### 
+#                                                  Plot interval size by reliability 
+####################################################################################################################################### 
+# load gene-level test results
+load("model_output/gene_res.RData")
+gene_res = gene_res %>% 
+  dplyr::group_by(UNIPROT, ct) %>%
+  # compute interval lengths for each gene and cell type
+  dplyr::summarise(m_length = abs(mu_upr - mu_lwr),
+                   p_length = abs(prot_upr - prot_lwr),
+                   r_length = abs(r_upr - r_lwr),
+                   sig = significant) %>%
+  ungroup() %>%
+  dplyr::group_by(UNIPROT) %>%
+  # compute minimum interval length (corresponds to maximum reliability)
+  dplyr::summarise(m_length = min(m_length, na.rm = T),
+                   p_length = min(p_length, na.rm = T),
+                   r_length = min(r_length, na.rm = T),
+                   sig = sum(sig) > 0)
+
+# combine interval lengths with reliability df
+interval_length = protein_point2 %>%
+  dplyr::group_by(UNIPROT) %>%
+  # average data set agreement
+  dplyr::summarise(cors = mean(cors, na.rm = T)) %>%
+  merge(group_ref, all = T) %>%
+  # compute average reliability (if both are observed)
+  dplyr::mutate(weighted_rel = ifelse(is.finite(rel_av + cors), (rel_av + cors)/2, rel_av)) %>%
+  merge(gene_res)
+
+# combine mrna reliability information
+interval_length = mrna_point2 %>%
+  dplyr::group_by(UNIPROT) %>%
+  dplyr::summarise(mrna_cors = mean(mrna_cors, na.rm = T)) %>%
+  merge(interval_length) %>% 
+  # bin reliabilities into groups
+  mutate(cors_bin = ntile(cors, 10), rel_bin = ntile(rel_max, 10), mrna_bin = ntile(mrna_cors, 10)) %>%
+  # remove gene products with large disagreement between reliability methods
+  filter(abs(cors_bin - rel_bin) <= 3) %>%
+  dplyr::group_by(UNIPROT) %>%
+  dplyr::mutate(rel2 = min(cors, rel_max, na.rm = T)) %>%
+  ungroup()
+
+# plot interval length for rptr by maximum protein consistency
+g = ggplot() +
+  geom_smooth(data = interval_length, mapping = aes(x = percent_rank(rel_max), y = r_length), 
+              linewidth = 6, color = "black") +
+  xlab("Maximum Protein Consistency (Percent Rank)") +
+  ylab("Minimum rPTR Interval Length") +
+  theme(panel.background = element_rect(fill = 'white', color = "slategray4"),
+          panel.grid.major = element_line(color = 'slategray2'),
+          panel.grid.minor = element_line(color = 'slategray1'),
+          legend.position = "bottom",
+          text = element_text(size = text_size - 40))  
+g
+ggsave(plot = g, filename = "figs_results/consistency_comparison_cors_max.pdf", 
+       height = 15, width = 30, units = "in", limitsize = F)
+```
+
+```{r fig3, echo = FALSE, warning = FALSE, message = FALSE, fig.width = 30, fig.height = 15, cache = F, eval = T}
+####################################################################################################################################### 
+#                                               Plot zscores for high and low reliability proteins    
+####################################################################################################################################### 
+# compute mrna z-scores 
+mrna_z = prep_list$mrna %>% 
+  dplyr::group_by(UNIPROT, pop_mrna) %>%
+  dplyr::reframe(mrna_zscore = scale(log2((mrna_sum/counts) + 0.0001))[,1],
+                   ct = ct) %>%
+  ungroup() %>%
+  filter(is.finite(mrna_zscore)) %>%
+  group_split(pop_mrna)
+
+# compute protein z-scores
+protein_z = prep_list$protein %>%
+  dplyr::group_by(UNIPROT, pop_protein, ct) %>%
+  dplyr::summarise(prot_av = mean(pep_av, na.rm = T)) %>%
+  ungroup() %>%
+  dplyr::group_by(UNIPROT, pop_protein) %>%
+  dplyr::reframe(protein_zscore = scale(prot_av)[,1],
+                   ct = ct) %>%
+  ungroup() %>%
+  filter(is.finite(protein_zscore)) %>%
+  group_split(pop_protein)
+
+# high consistency and low consistency proteins 
+gene_ref = data.frame(UNIPROT = c("P60174", "P09972"),
+                      var_group = c("High Consistency", "Low Consistency"))
+
+# draw plot
+p2 = plot_zscore_means_double(mrna_z = mrna_z, protein_z = protein_z, 
+                              uni = gene_ref, clusters = clusters,
+                              mrna_pop_label = c(rep("mRNA 10x", 2), rep("mRNA Drop-Seq", 3)),
+                              protein_pop_label = c(rep("Protein (p)SCoPE", 4), "Protein plexDIA"),
+                              mrna_color = mrna_color, protein_color = protein_color, pass_text = text_size + 40) +
+     theme(text = element_text(size = text_size + 40),
+           panel.spacing.y = unit(2, "lines"),
+           strip.text = element_text(size = text_size + 40),
+           axis.text.y = element_text(size = text_size + 40),
+           axis.text.x = element_text(size = text_size + 40, vjust = 0),
+           axis.title.y = element_text(size = text_size + 40),
+           axis.title.x = element_blank(),
+           legend.key = element_rect(colour = NA, fill = NA),
+           legend.box.background = element_blank())
+
+p2
+ggsave(plot = p2, filename = "figs_results/z_compare.pdf", height = 44, width = 40, units = "in", limitsize = F)
+```
+

@@ -1,0 +1,316 @@
+---
+title: "Model Analysis Results"
+author: "Megan Elcheikhali (Slavov/Franks Labs)"
+date: "`r Sys.Date()`"
+output: pdf_document
+---
+
+```{r setup, include=FALSE, cache.lazy = FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+library(AnnotationDbi)
+library(org.Hs.eg.db)
+library(GO.db)
+library(colorspace)
+library(viridis)
+library(ggridges)
+library(ggvenn)
+library(ggpubr)
+library(tidyverse)
+library(patchwork)
+source("scripts/plot_functions.R")
+source("scripts/go_functions.R")
+clusters = c("EC", "PTM", "LC", "SPG", "SPC", "St")
+
+mrna_color = "#B2182B"
+protein_color = "#2166AC"
+multi_colors = "lightgray"
+
+text_size = 80
+```
+
+```{r fig1, echo = FALSE, warning = FALSE, message = FALSE, cache = F, fig.height = 30, fig.width = 30}
+####################################################################################################################################### 
+#                                                     Plot gene-level test results     
+####################################################################################################################################### 
+# load test results
+load("model_output/gene_res.RData")
+
+# output csv with summary of significant genes
+sig_genes = output_significant_genes(gene_res = gene_res)
+write.csv(sig_genes, "figs_results/significant_genes.csv", row.names=FALSE)
+
+# plot posterior mrna, protein means 
+m1 = plot_posterior_means(gene_res = gene_res, pass_text = text_size, small = 4, big = 8) + #, mega_onescale = 7) + 
+  theme(legend.position = "bottom", 
+        text = element_text(size = text_size),
+        axis.text = element_text(size = text_size),
+        axis.title = element_text(size = text_size)) 
+m1
+ggsave(plot = m1, filename = "figs_results/post_av.pdf", width = 22, height = 20, units = "in")
+```
+
+```{r fig2, echo = FALSE, warning = FALSE, message = FALSE, cache = F, fig.height = 35, fig.width = 30}
+# volcano plot of posterior mean of rptr with transformed poserior probability
+r1 = plot_volcano(gene_res, pass_text = text_size, ct_select = clusters, ncol_facet = 3, special_gene = uni_select) + 
+  theme(legend.position = "bottom", 
+        axis.ticks.x = element_line(color = "black", linewidth = 4),
+        axis.ticks.length.x = unit(1, "cm"),
+        text = element_text(size = text_size),
+        title = element_text(size = text_size - 2),
+        axis.text.y = element_text(size = text_size),
+        axis.text.x = element_text(size = text_size),
+        axis.title = element_text(size = text_size)) 
+r1
+ggsave(plot = r1, filename = "figs_results/fig2_b.pdf", width = 25, height = 22, units = "in")
+
+# z transform mrna
+load("processed_data/prepped_data.RData")
+mrna_obs_z = prep_list$mrna %>%
+  dplyr::group_by(pop_mrna, UNIPROT) %>%
+  dplyr::transmute(ct = ct, mrna_zscore = scale(log2(mrna_sum/counts + 0.0001))[,1]) %>%
+  ungroup() %>%
+  filter(is.finite(mrna_zscore)) %>%
+  group_split(pop_mrna)
+
+# z transform protein
+protein_obs_z = prep_list$protein %>%
+  dplyr::group_by(UNIPROT, ct, pop_protein) %>%
+  dplyr::summarise(modeled_value = mean(pep_av, na.rm = T)) %>%
+  ungroup() %>%
+  dplyr::group_by(UNIPROT, pop_protein) %>%
+  dplyr::mutate(protein_zscore = scale(modeled_value)[,1]) %>%
+  ungroup() %>%
+  dplyr::select(-c(modeled_value)) %>%
+  filter(is.finite(protein_zscore)) %>%
+  group_split(pop_protein)
+
+# gene of interest to show z transformed observed data and posterior intervals 
+uni_select = "P27797"
+p2 = plot_zscore_means(mrna_z = mrna_obs_z, protein_z = protein_obs_z, gene_res = gene_res,
+                       uni = uni_select, clusters = clusters,
+                       mrna_pop_label = c(rep("mRNA 10x", 2), rep("mRNA Drop-Seq", 3)),
+                       protein_pop_label = c(rep("Protein (p)SCoPE", 4), "Protein plexDIA"),
+                       mrna_color = mrna_color, protein_color = protein_color,
+                       pass_text = text_size + 30) &
+  theme(text = element_text(size = text_size + 30),
+        axis.title.y = element_text(size = text_size + 30),
+        axis.title.x = element_blank())
+ggsave(plot = p2, filename = "figs_results/fig2_a.pdf", width = 40, height = 35, units = "in")
+```
+
+```{r fig3, echo = FALSE, warning = FALSE, message = FALSE, cache = F, fig.height = 30, fig.width = 30}
+# load posterior mrna, protein correlations
+load("model_output/cor_comparison.RData")
+
+# plot comparison of model fit and empirical correlations
+mp = plot_correlation_comparison_med(cor_comparison = cor_comparison, gene_res = gene_res, pass_text = text_size)
+mp
+
+ggsave(plot = mp[[1]], filename = "figs_results/supp_cor1.pdf", width = 30, height = 7, units = "in")
+ggsave(plot = mp[[2]], filename = "figs_results/supp_cor2.pdf", width = 30, height = 30, units = "in")
+ggsave(plot = mp[[3]], filename = "figs_results/supp_cor3.pdf", width = 7, height = 30, units = "in")
+```
+
+```{r fig4, echo = FALSE, warning = FALSE, message = FALSE, fig.width = 40, fig.height = 50, eval = T, cache = F}
+####################################################################################################################################### 
+#                                                     Plot GO-level test results     
+####################################################################################################################################### 
+# load go test results
+load("model_output/go_test_results_centered.RData")
+
+# use posterior exclusions probability p_r to compute fdr
+test_res = test_res %>% 
+  dplyr::group_by(ct) %>%
+  arrange(p_r, .by_group = T) %>% # compute expected proportion of false discoveries for r, mu, mu + r
+  dplyr::mutate(fdr = cummean(p_r[order(p_r)]), # expected proportion
+                significant_fdr = fdr <= 0.05)
+
+# output significant groups and record of observed UNIPROT IDs associated
+gene_ref = AnnotationDbi::select(org.Hs.eg.db, keys = unique(test_res$GO), keytype = "GO", columns = c("UNIPROT")) %>%
+  filter(UNIPROT %in% gene_res$UNIPROT) %>%
+  dplyr::select(GO, UNIPROT)
+sig_groups = output_significant_groups(test_res = test_res, gene_ref = gene_ref)
+write.csv(sig_groups, "figs_results/significant_go.csv", row.names=FALSE)
+```
+
+```{r fig9, echo = FALSE, warning = FALSE, message = FALSE, fig.width = 80, fig.height = 50, eval = T, cache = F}
+# selected terms for heatmap and tick mark plot
+TERMS = c("histone acetyltransferase activity", "mitochondrial respiratory chain complex III", 
+  "sperm flagellum", "valine catabolic process", "DNA methylation involved in gamete generation",
+  "double-strand break repair via nonhomologous end joining") #, "NAD+ kinase activity")
+GO_heatmap = test_res %>% filter(TERM %in% TERMS) %>% pull(GO) %>% unique()
+
+# plot heatmap
+b = plot_go_heatmap(test_res, go_select = GO_heatmap, TERM_abbrev = NULL, ct_select = "St") + 
+    xlab("Cell Type") +
+  theme(plot.title = element_text(size = text_size + 40),
+        text = element_text(size = text_size),
+        axis.text.y = element_text(size = text_size), #, angle = 90, hjust = 0.5, vjust = 0.5),
+        axis.text.x = element_text(size = text_size + 30),
+        axis.title = element_text(size = text_size + 30),
+        legend.position = "none",
+        legend.key.size = unit(4, "cm"))
+
+b
+ggsave(plot = b, filename = "figs_results/fig2_c.pdf", width = 35, height = 50, units = "in", limitsize = FALSE)
+
+# recover legend to include in plot separately
+b = plot_go_heatmap(test_res, go_select = GO_heatmap, TERM_abbrev = NULL, ct_select = "St") + 
+  theme(legend.position = "none",
+        legend.key.size = unit(4, "cm"))
+legend = cowplot::get_legend(b)
+ggsave(plot = legend, filename = "figs_results/fig2_legend.pdf", width = 4, height = 1, units = "in", limitsize = FALSE)
+
+# format cell type title
+celltype_title = c("Endothelial Cells", "Peritubular Myoid Cells", "Leydig Cells", "Spermatagonia Cells", "Spermatocyte Cells", "Spermatid Cells")
+load(paste0("model_output/GO_dat_", clusters[6], ".RData"))
+
+# plot tick marks: posterior mean of rptr for genes in each group
+d = plot_ticks(GO_dat = GO_dat, gene_res = test_res, GO_list = GO_heatmap,
+                celltype = clusters[6], celltype_title = celltype_title[6], 
+                TERM_abbrev = NULL, pass_text = text_size + 10)
+
+ggsave(plot = d[[1]][[1]], filename = "figs_results/fig2_d1.pdf", 
+       width = 25, height = 10, units = "in", limitsize = FALSE)
+ggsave(plot = d[[1]][[2]], filename = "figs_results/fig2_d2.pdf", 
+       width = 25, height = 40, units = "in", limitsize = FALSE)
+ggsave(plot = d[[2]][[1]], filename = "figs_results/fig2_d3.pdf", 
+       width = 10, height = 10, units = "in", limitsize = FALSE)
+ggsave(plot = d[[2]][[2]], filename = "figs_results/fig2_d4.pdf", 
+       width = 10, height = 40, units = "in", limitsize = FALSE)
+```
+
+```{r fig11, echo = FALSE, warning = FALSE, message = FALSE, fig.width = 30, fig.height = 30, eval = T, cache = F}
+####################################################################################################################################### 
+#                                                     Run complex-level testing   
+####################################################################################################################################### 
+
+# complexes tested will be filtered by protein reliability:
+# load observed data and protein consistency
+load("processed_data/protein_consistency.RData")
+load("processed_data/prepped_data.RData")
+
+# compute median protein consistency across data sets 
+group_ref = protein_reliability %>%
+  stats::na.omit() %>%
+  dplyr::group_by(UNIPROT) %>%
+  dplyr::summarise(rel_av = median(reliability, na.rm = T)) %>%
+  ungroup() 
+
+# z-transform protein data
+cor_df_prot_z = prep_list$protein %>%
+  dplyr::group_by(UNIPROT, ct, measure) %>%
+  dplyr::summarise(a_av = mean(pep_av, na.rm = T)) %>%
+  ungroup() %>%
+  dplyr::group_by(UNIPROT, measure) %>%
+  dplyr::mutate(a_av = scale(a_av)[,1],
+                pop_a = measure) %>%
+  dplyr::select(-measure) %>%
+  ungroup()
+
+# compute data set agreement for protein
+cor_df_prot = cor_df_prot_z %>%
+  merge(transmute(cor_df_prot_z, UNIPROT = UNIPROT, ct = ct, b_av = a_av, pop_b = pop_a)) %>%
+  filter(pop_a != pop_b) %>%
+  dplyr::group_by(UNIPROT, pop_a, pop_b) %>%
+  dplyr::summarise(cors = cor(a_av, b_av, use = "pairwise.complete.obs"))
+
+# combine data set agreement and protein consistency 
+protein_point = cor_df_prot %>% 
+  dplyr::transmute(cors = cors, UNIPROT = UNIPROT) %>%
+  ungroup() %>%
+  merge(group_ref, all = T) %>%
+  dplyr::group_by(UNIPROT) %>%
+  # compute average reliability per protein
+  dplyr::summarise(reliability = mean(c(rel_av, cors), na.rm = T)) %>%
+  ungroup() %>%
+  merge(complex_uni) %>%
+  # compute average reliability across subunits of complex
+  dplyr::group_by(ComplexName) %>%
+  dplyr::summarise(reliability = mean(reliability, na.rm = T))
+
+# load complex level posterior correlations
+load("model_output/complex_correlations.RData")
+# load complexes and associated UNIPROT IDs
+complex_uni =  read_delim("processed_data/coreComplexes.txt", 
+    delim = "\t", escape_double = FALSE, 
+    trim_ws = TRUE)
+complex_uni = complex_uni %>% 
+  dplyr::group_by(ComplexName) %>% 
+  dplyr::reframe(UNIPROT = unlist(strsplit(`subunits(UniProt IDs)`, ";", fixed = T)))
+
+# identify proportion of UNIPROT IDs assigned to each complex that are actually observed
+uni_rec = complex_uni %>% merge(gene_res, all.x = T) %>% dplyr::group_by(ComplexName) %>% dplyr::summarise(n_uni = length(unique(UNIPROT[is.finite(significant)])), n_uni_big = length(unique(UNIPROT)), prop_rep = n_uni/n_uni_big)
+
+# filtering to identify testable complexes based on reliability and a minimum of 25% representation
+testable_complexes = protein_point %>% merge(uni_rec) %>% filter(ComplexName %in% complex_correlations$ComplexName & prop_rep > 0.25) %>%
+  dplyr::mutate(rel_med = median(reliability, na.rm = T)) %>%
+  filter(reliability >= rel_med) %>% pull(ComplexName)
+
+# test complexes: identify those with correlations systematically above or below the mean
+complex_test = complex_correlations %>%
+  filter(ComplexName %in% testable_complexes) %>%
+  dplyr::group_by(.iteration, .chain) %>%
+  dplyr::mutate(cor_av = mean(cor_go, na.rm = T), # average across complexes for each set of samples
+                cor_centered = cor_go - cor_av) %>% # center by above computed average
+  ungroup() %>%
+  dplyr::group_by(ComplexName) %>%
+  dplyr::summarise(prop_high = mean(cor_centered > 0), # proportion of samples with centered correlation above mean
+                   cor_med = median(cor_go),
+                   cor_med_centered = median(cor_centered),
+                   mrna_var = mean(mrna_var),
+                   prot_var = mean(prot_var)) %>%
+  ungroup() %>%
+  dplyr::group_by(ComplexName) %>%
+  dplyr::mutate(prop = min(prop_high, 1 - prop_high)) %>% # minimum of both tails to get PEP for two-sided test
+  ungroup() %>% 
+  arrange(prop) %>%
+  mutate(fdr = cummean(prop), # compute fdr
+         significant = fdr < 0.05) # identify significance
+
+####################################################################################################################################### 
+#                                                     Plot significant complexes
+####################################################################################################################################### 
+# complexes selected for violin plot
+complex_labels = data.frame(ComplexName = c("Cell division cycle complex (CDC27, CDC16, ANAPC7)", "AP2 adaptor complex", 
+                    "Ubiquitin E3 ligase (SIAH1, SIP, SKP1A, TBL1X)", "Respiratory chain complex I (holoenzyme), mitochondrial",
+                   "DSS1 complex", "MTA2 complex", "SIN3 complex", "Toposome"),
+                   significant = rep(c(T, F), each = 4))
+
+# filter complex correlations to selected list
+complex_info_filtered = complex_correlations %>%
+  merge(complex_labels)
+
+complex_summary_filtered = complex_test %>% 
+    merge(complex_labels) %>%
+    mutate(ComplexName_factor = forcats::fct_reorder(ComplexName, cor_med))
+
+complex_info_filtered = complex_summary_filtered %>% select(ComplexName, ComplexName_factor) %>%
+  merge(complex_info_filtered)
+complex_av = complex_correlations %>% pull(cor_go) %>% median()
+
+# draw violin plot
+g = ggplot() +
+  geom_violin(data = complex_correlations, aes(y = cor_go, x = "All Complexes", fill = "All Complexes")) +
+  geom_point(aes(y = complex_av, x = "All Complexes"), size = 20) +
+  geom_violin(data = complex_info_filtered, aes(y = cor_go, x = ComplexName_factor, fill = significant)) +
+  geom_point(data = complex_summary_filtered, aes(y = cor_med, x = ComplexName_factor), size = 20) +
+  scale_x_discrete(labels = function(x) str_wrap(x, width = 20)) +
+  scale_fill_manual(values = c("lightgray", "gray47", "purple")) +
+  ylab("Across Clusters Correlation of Complex Mean") +
+  xlab("") +
+  ylim(-1, 1) +
+  theme(text = element_text(size = text_size + 20),
+        axis.text.x = element_text(size = text_size + 20, angle = 50, hjust = 1, vjust = 1),
+        axis.text.y = element_text(size = text_size + 20),
+        axis.title.x = element_text(size = text_size + 20),
+        axis.title.y = element_text(size = text_size + 8),
+        panel.background = element_rect(fill = 'white', color = "slategray4"),
+        panel.grid.major = element_line(color = 'slategray2'),
+        panel.grid.minor = element_line(color = 'slategray1'),
+        legend.position = "none")
+
+g
+ggsave(plot = g, filename = paste0("figs_results/complex_violin.pdf"), 
+       width = 90, height = 42, units = "in", limitsize = FALSE)
+```

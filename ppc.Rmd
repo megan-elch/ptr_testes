@@ -1,0 +1,149 @@
+---
+title: "Posterior Predictive Checks"
+author: "Megan Elcheikhali (Slavov/Franks Labs)"
+date: "`r Sys.Date()`"
+output: pdf_document
+---
+
+```{r setup, include=FALSE, cache.lazy = FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+library(AnnotationDbi)
+library(org.Hs.eg.db)
+library(GO.db)
+library(tidyverse)
+source("scripts/plot_functions.R")
+clusters = c("EC", "PTM", "LC", "SPG", "SPC", "St")
+text_size = 80
+
+# function to compute total least squares slope
+tls_fun = function(x, y){
+  r = prcomp(cbind(x, y))
+  v = r$rotation
+  beta <- v[2,1]/v[1,1]
+  intercept = r$center[2] - beta*r$center[1]
+  list(beta = beta, intercept = intercept)
+}
+```
+
+```{r f1, echo = FALSE, warning = FALSE, message = FALSE, cache = F, fig.height = 10, fig.width = 40}
+####################################################################################################################################### 
+#                                                 Compute posterior predictive coverage 
+####################################################################################################################################### 
+
+# load previously filtered cluster-level observations
+load("processed_data/prepped_data.RData")
+# z-transform mrna fold changes and format
+mrna_obs_z = prep_list$mrna %>%
+  dplyr::group_by(pop_mrna, UNIPROT) %>%
+  dplyr::transmute(ct = ct, mrna_zscore = scale(log2(mrna_sum/counts + 0.0001))[,1]) %>%
+  ungroup() %>%
+  dplyr::mutate(pop_label = paste("mRNA", pop_mrna)) %>%
+  dplyr::select(-pop_mrna) %>%
+  filter(is.finite(mrna_zscore))
+
+# z-transformed protein fold changes and format
+protein_obs_z = prep_list$protein %>%
+  dplyr::group_by(UNIPROT, ct, pop_protein) %>%
+  dplyr::summarise(pop = paste("Protein", pop_protein),
+                   modeled_value = mean(pep_av, na.rm = T)) %>%
+  ungroup() %>%
+  dplyr::group_by(UNIPROT, pop) %>%
+  dplyr::mutate(protein_zscore = scale(modeled_value)[,1]) %>%
+  ungroup() %>%
+  dplyr::mutate(pop_label = pop) %>%
+  dplyr::select(-c(pop, pop_protein, modeled_value)) %>%
+  filter(is.finite(protein_zscore))
+
+# load previously extracted z-transformed posterior predictive draws
+load("model_output/mrna_ppc_z.RData")
+load("model_output/protein_ppc_z.RData")
+mrna_ppc_z = mrna_ppc_z %>% 
+  dplyr::select(-c(mrna_ppc_unscaled, mrna_ppc_lwr_unscaled, mrna_ppc_upr_unscaled, mrna_ppc_med_unscaled))
+
+protein_ppc_z = protein_ppc_z %>% 
+  dplyr::select(-c(protein_ppc_unscaled, protein_ppc_lwr_unscaled, protein_ppc_upr_unscaled, protein_ppc_med_unscaled))
+
+# load previously extracted posterior predictive variance
+load("model_output/mrna_ppc_variance.RData")
+load("model_output/protein_ppc_variance.RData")
+
+# output table with posterior predictive summary
+vv = plot_ppc_stats(mrna_ppc_variance, protein_ppc_variance,
+                    mrna_ppc_z, protein_ppc_z,
+                    mrna_obs_z, protein_obs_z,
+                    text_pass = 30)
+
+vv
+vv %>% kableExtra::save_kable("figs_results/ppc_cover.pdf", density = 1000)
+```
+
+
+```{r f2, eval = T, echo = FALSE, warning = FALSE, message = FALSE, cache = F, fig.height = 60, fig.width = 60}
+####################################################################################################################################### 
+#                                                 Plot posterior predictive correlation 
+####################################################################################################################################### 
+# load previously computed posterior predictive correlations and observed correlations
+load("model_output/ppc_cor.RData")
+
+# data frames that help with formatting/labeling
+mrna_df_rec = data.frame(pop_mrna = paste0("Pop", 1:5), adult = paste("Adult", 1:5),
+                         mrna_dataset = c(rep("mRNA 10x", 2), rep("mRNA Drop-Seq", 3)))
+    
+protein_df_rec = data.frame(pop_protein = paste0("Pop", 1:5),
+                            protein_dataset = c(rep("Protein SCoPE2", 4), "Protein plexDIA"))
+
+# reformat posterior predictive correlations   
+ppc_cor = ppc_cor_obj$ppc_cor
+rm(ppc_cor_obj) 
+ppc_cor = ppc_cor %>% merge(mrna_df_rec) %>% merge(protein_df_rec) 
+save(ppc_cor, file = "model_output/ppc_cor_prepped.RData")
+rm(ppc_cor)
+
+# reformat observed correlations  
+load("model_output/ppc_cor.RData")
+obs_cor = ppc_cor_obj$obs_cor
+rm(ppc_cor_obj)
+obs_cor = obs_cor %>% merge(mrna_df_rec) %>% merge(protein_df_rec)
+save(obs_cor, file = "model_output/obs_cor_prepped.RData")
+load("model_output/ppc_cor_prepped.RData")
+
+# compute empirical cdf
+ppc_cor2 = ppc_cor %>% 
+  # bin posterior predictive correlations to nearest quantile by rounding
+  dplyr::mutate(ppc_round = round(ppc_cor, 2)) %>%
+  dplyr::group_by(pop_protein, pop_mrna, mrna_dataset, protein_dataset, .iteration, .chain) %>% 
+  # compute cdf of pp correlations across gene products
+  dplyr::mutate(ecdf_summary = ecdf(ppc_cor)(ppc_cor)) %>%
+  ungroup() %>%
+  dplyr::group_by(mrna_dataset, protein_dataset, ppc_round) %>%
+  # compute 95% pp interval for each quantile bin
+  dplyr::summarise(ppc_lwr = quantile(ecdf_summary, 0.025), ppc_upr = quantile(ecdf_summary, 0.975)) %>%
+  ungroup() 
+
+# plot pp and observed correlations 
+mp = ggplot() +
+  geom_ribbon(data = ppc_cor2, aes(ymin = ppc_lwr, ymax = ppc_upr, x = ppc_round,
+                                   fill = "Posterior Predictive", color = "Posterior Predictive")) +
+  stat_ecdf(data = obs_cor, aes(x = pop_cor, color = "Observed", fill = "Observed"), geom = "step", size = 3) +
+  facet_grid(rows = vars(mrna_dataset), cols = vars(protein_dataset)) +
+  scale_color_manual(values = c("gray60", "black"), limits = c("Posterior Predictive", "Observed"), name = "") +
+  scale_fill_manual(values = c("gray60", "black"), limits = c("Posterior Predictive", "Observed"), name = "") +
+  guides(fill = guide_legend(nrow = 1, override.aes = list(size=c(10, 10), shape = c(15, 15), 
+                                                          color = c("gray60", "black")))) +
+  xlab("Across Clusters Correlation") +
+  ylab("CDF") +
+  theme(panel.background = element_rect(fill = 'white', color = "slategray4"),
+        panel.grid.major = element_line(color = 'slategray2'),
+        panel.grid.minor = element_line(color = 'white'),
+        legend.position = "bottom",
+        legend.key.size = unit(2, "cm"),
+        strip.text = element_text(size = text_size - 20),
+        panel.spacing.x = unit(75, "pt"),
+        panel.spacing.y = unit(25, "pt"),
+        text = element_text(size = text_size),
+        axis.text = element_text(size = text_size),
+        legend.text = element_text(margin = margin(r = 2, unit="inch"), size = text_size))
+
+ggsave(plot = mp, filename = "figs_results/ppc_cor.pdf", width = 40, height = 25, units = "in", limitsize = F)
+mp
+```
