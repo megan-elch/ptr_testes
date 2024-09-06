@@ -16,8 +16,8 @@ source("scripts/plot_functions.R")
 source("scripts/go_functions.R")
 clusters = c("EC", "PTM", "LC", "SPG", "SPC", "St")
 
-mrna_color = "#B2182B"
-protein_color = "#2166AC"
+mrna_color = "#2166AC"
+protein_color = "#B2182B"
 multi_colors = "lightgray"
 
 text_size = 100
@@ -257,7 +257,7 @@ g = ggplot() +
           panel.grid.minor = element_line(color = 'slategray1'),
           legend.position = "bottom",
           text = element_text(size = text_size - 40))  
-g
+# g
 ggsave(plot = g, filename = "figs_results/consistency_comparison_cors_max.pdf", 
        height = 15, width = 30, units = "in", limitsize = F)
 ```

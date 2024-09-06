@@ -8,13 +8,13 @@ source("hs/model_functions.R")
 # cell types used in analysis
 clusters = c("EC", "LC", "PTM", "SPC", "SPG", "St")
 
-output_path = paste0("model_output/")
+output_path = paste0("/model_output/")
 
 # processed data for running model (see prep file)
-load(paste0("processed_data/processed_data_hs.RData"))
+load(paste0("data/suff_stats.RData"))
 
 # ############################################################################
-# ################################ MODEL PREP ################################ 
+# ############################ MODEL PREP AND EDA ############################ 
 # ############################################################################
 # run model prep
 prep_list = model_prep(mrna_suff, protein_suff, n_protein = 5, n_mrna = 5, clusters = clusters)
@@ -36,7 +36,7 @@ fit <- mod$sample(
   parallel_chains = 10,
   init = 0,
   refresh = 30,
-  iter_warmup = 600,
-  iter_sampling = 200
+  iter_warmup = 450,
+  iter_sampling = 125
 )
 fit$save_object(file = paste0(output_path, "fit.rds"))

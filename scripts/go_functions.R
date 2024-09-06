@@ -26,26 +26,36 @@ run_go_test_hs = function(posterior_draws, GO_info, GO_info2, GO_tab, min_size =
                      nd = unique(nd))
   
   test_res = posterior_draws_go %>%
-    dplyr::group_by(.iteration, .chain, GO) %>% # record average across genes not associated with each group
-    dplyr::mutate(r_group = mean(r, na.rm = T)) %>%
-    ungroup() %>%
-    dplyr::mutate(r = r - r_group) %>%
     dplyr::group_by(.iteration, .chain, GO, ct) %>%
-    dplyr::summarise(r_mean = mean(r, na.rm = T), # compute sample average across genes for each group, posterior draw
+    dplyr::summarise(r_mean = mean(r, na.rm = T),
                      mu_mean = mean(mu, na.rm = T),
                      prot_mean = mean(prot, na.rm = T),
                      TERM = unique(TERM)) %>%
     ungroup() %>%
+    dplyr::group_by(.iteration, .chain, GO) %>% # record average across genes not associated with each group
+    dplyr::mutate(r_group = mean(r_mean, na.rm = T),
+                  r_scaled_mean = r_mean - r_group,
+                  mu_group = mean(mu_mean, na.rm = T),
+                  mu_scaled_mean = mu_mean - mu_group,
+                  prot_group = mean(prot_mean, na.rm = T),
+                  prot_scaled_mean = prot_mean - prot_group) %>%
+    ungroup() %>%
     dplyr::group_by(GO, ct) %>%
     dplyr::summarise(TERM = unique(TERM), 
                      r_av = mean(r_mean, na.rm = T), # average r in group
+                     r_scaled_av = mean(r_scaled_mean, na.rm = T),
                      mu_av = mean(mu_mean, na.rm = T), # average mu in group
                      prot_av = mean(prot_mean, na.rm = T), # average mu + r in group
                      r_lwr = quantile(r_mean, 0.025, na.rm = T), # 95 pct interval r
                      r_med = median(r_mean, na.rm = T),
                      r_upr = quantile(r_mean, 0.975, na.rm = T),
-                     p_r = ifelse(mean(r_mean < 0) <= 1 - mean(r_mean < 0), mean(r_mean < 0), 1 - mean(r_mean < 0)),
-                     significant = !(r_lwr < 0 & r_upr > 0)) %>%
+                     r_scaled_lwr = quantile(r_scaled_mean, 0.025, na.rm = T), # 95 pct interval r
+                     r_scaled_med = median(r_scaled_mean, na.rm = T),
+                     r_scaled_upr = quantile(r_scaled_mean, 0.975, na.rm = T),
+                     p_r = ifelse(mean(r_scaled_mean < 0) <= 1 - mean(r_scaled_mean < 0), mean(r_scaled_mean < 0), 1 - mean(r_scaled_mean < 0)),
+                     p_mu = ifelse(mean(mu_scaled_mean < 0) <= 1 - mean(mu_scaled_mean < 0), mean(mu_scaled_mean < 0), 1 - mean(mu_scaled_mean < 0)),
+                     p_prot = ifelse(mean(prot_scaled_mean < 0) <= 1 - mean(prot_scaled_mean < 0), mean(prot_scaled_mean < 0), 1 - mean(prot_scaled_mean < 0)),
+                     significant = !(r_scaled_lwr < 0 & r_scaled_upr > 0)) %>%
     ungroup()
   list(posterior_draws_go = posterior_draws_go, test_res = test_res)
 }
@@ -54,18 +64,27 @@ run_go_test_hs = function(posterior_draws, GO_info, GO_info2, GO_tab, min_size =
 compute_ticks_draws = function(posterior_draws_go, test_res, celltype){
   posterior_draws_go = posterior_draws_go %>%
     dplyr::group_by(.iteration, .chain, GO) %>% # record average across genes not associated with each group
-    dplyr::mutate(r_group = mean(r, na.rm = T)) %>%
+    dplyr::mutate(r_group = mean(r, na.rm = T),
+                  prot_group = mean(prot, na.rm = T),
+                  mu_group = mean(mu, na.rm = T)) %>%
     ungroup() %>%
-    dplyr::mutate(param = r - r_group) %>%
+    dplyr::mutate(param = r,
+                  param_scaled = r - r_group,
+                  prot_scaled = prot - prot_group,
+                  mu_scaled = mu - mu_group) %>%
     dplyr::filter(ct == celltype)
   
   go = test_res %>%
     dplyr::group_by(ct) %>%
+    arrange(p_prot, .by_group = T) %>% # compute expected proportion of false discoveries for r, mu, mu + r
+    dplyr::mutate(fdr_prot = cummean(p_prot[order(p_prot)])) %>%
+    arrange(p_mu, .by_group = T) %>% # compute expected proportion of false discoveries for r, mu, mu + r
+    dplyr::mutate(fdr_mu = cummean(p_mu[order(p_mu)])) %>%
     arrange(p_r, .by_group = T) %>% # compute expected proportion of false discoveries for r, mu, mu + r
     dplyr::mutate(fdr = cummean(p_r[order(p_r)])) %>%
     ungroup() %>%
     dplyr::filter(significant == T) %>%
-    dplyr::select(ct, GO, fdr, r_lwr, r_upr) %>%
+    dplyr::select(ct, GO, fdr, r_lwr, r_upr, r_scaled_lwr, r_scaled_upr, fdr_prot, fdr_mu) %>%
     distinct(.keep_all = TRUE)
   
   # compute gene-level summaries for members in each GO group
@@ -73,15 +92,23 @@ compute_ticks_draws = function(posterior_draws_go, test_res, celltype){
     merge(go) %>%
     dplyr::group_by(UNIPROT) %>%
     dplyr::summarise(param_mean = mean(param),
+                     param_scaled_mean = mean(param_scaled),
+                     mu_mean = mean(mu),
+                     mu_scaled_mean = mean(mu_scaled),
+                     prot_mean = mean(prot),
+                     prot_scaled_mean = mean(prot_scaled),
                      GO = unique(GO),
                      TERM = unique(TERM),
                      ct = celltype,
                      prt = mean(fdr),
                      r_lwr = mean(r_lwr),
-                     r_upr = mean(r_upr)) %>%
+                     r_upr = mean(r_upr),
+                     r_scaled_lwr = mean(r_scaled_lwr),
+                     r_scaled_upr = mean(r_scaled_upr)) %>%
     ungroup() %>%
     dplyr::group_by(GO) %>%
-    dplyr::mutate(go_mean = mean(param_mean)) %>%
+    dplyr::mutate(go_mean = mean(param_mean),
+                  go_scaled_mean = mean(param_scaled_mean)) %>%
     ungroup()
   return(GO_dat)
 }
@@ -137,8 +164,8 @@ plot_go_heatmap = function(test_res, go_select = NULL, TERM_abbrev = NULL, ct_se
       dplyr::mutate(TERM = TERM_abbrev)
   }
   
-    # merge ordering and order cell types
-    test_res = test_res %>% merge(go_order, by = "GO") %>%
+  # merge ordering and order cell types
+  test_res = test_res %>% merge(go_order, by = "GO") %>%
     dplyr::mutate(param_mean = r_av) %>% 
     mutate(ct = factor(ct, levels = c("EC", "PTM", "LC", "SPG", "SPC", "St"))) %>% 
     arrange(GO_fct)
@@ -183,9 +210,9 @@ plot_go_means = function(test_res){
 
 # draw tick mark plot displaying posterior mean for genes associated with selected significant go groups
 plot_ticks = function(GO_dat, gene_res,
-                       n = 10, seed_id = 15,
-                       GO_list = NULL, celltype, celltype_title, TERM_abbrev = NULL,
-                       pass_text = 40, go_order = NULL){
+                      n = 10, seed_id = 15,
+                      GO_list = NULL, celltype, celltype_title, TERM_abbrev = NULL,
+                      pass_text = 40, go_order = NULL){
   
   plot_param = "r" # use ratio as plotting parameter
   x_title = "rPTR (Posterior Mean)" # axis label
@@ -315,4 +342,3 @@ plot_ticks = function(GO_dat, gene_res,
   
   return(b)
 }
-

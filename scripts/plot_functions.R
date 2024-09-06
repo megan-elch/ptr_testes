@@ -207,8 +207,8 @@ plot_zscore_means = function(mrna_z, protein_z, plex_z, gene_res,
     # draw posterior interval for ratio
     g2 = ggplot() +
       geom_hline(yintercept = 0, linetype = 3) +
-      geom_point(data = gene_res, mapping = aes(x = ct_factor, y = r_av), color = "gray47", size = 15) +
-      geom_linerange(data = gene_res, mapping = aes(x = ct_factor, ymin = r_lwr, ymax = r_upr), color = "gray47", linewidth = 15) +
+      geom_point(data = gene_res, mapping = aes(x = ct_factor, y = r_av), color = "slategray", size = 15) +
+      geom_linerange(data = gene_res, mapping = aes(x = ct_factor, ymin = r_lwr, ymax = r_upr), color = "slategray", linewidth = 15) +
       geom_path(data = gene_res, mapping = aes(x = ct_factor, y = r_av, group = UNIPROT)) +
       geom_text(x = 1.5, y = -1, aes(label = ylab_select), size = 40) +
       xlab("") +
@@ -227,10 +227,10 @@ plot_zscore_means = function(mrna_z, protein_z, plex_z, gene_res,
         geom_point(data = gene_res, mapping = aes(x = ct_factor, y = r_av, color = significant), size = 15) +
         geom_linerange(data = gene_res, mapping = aes(x = ct_factor, ymin = r_lwr, ymax = r_upr, color = significant), linewidth = 15) +
         geom_path(data = gene_res, mapping = aes(x = ct_factor, y = r_av, group = UNIPROT)) +
-        geom_text(x = 1.5, y = 1.5, aes(label = ylab_select), size = 45, color = "limegreen", fontface = "bold") +
+        geom_text(x = 1.5, y = 1.85, aes(label = ylab_select), size = 45, color = "limegreen", fontface = "bold") +
         xlab("") +
         ylab("rPTR Interval") +
-        scale_color_manual(values = c("purple", "gray47"), name = "", limits = c(TRUE, FALSE),
+        scale_color_manual(values = c("magenta3", "slategray"), name = "", limits = c(TRUE, FALSE),
                            labels = c("Significant rPTR"), breaks = c(TRUE)) +
         scale_size_manual(guide = "none") +
         theme(panel.background = element_rect(fill = 'white', color = "slategray4"),
@@ -336,7 +336,7 @@ output_significant_genes = function(gene_res = NULL, posterior_draws = NULL){
 }
 
 # volcano plot of transformed fdr and posterior mean of rptr
-plot_volcano = function(gene_res, sig_color = "purple", test_name = "Significant Nonzero", pass_text = 40, ct_select = NULL, ncol_facet = 3,
+plot_volcano = function(gene_res, total_sig, sig_color = "magenta3", test_name = "Significant Nonzero", pass_text = 40, ct_select = NULL, ncol_facet = 3,
                         special_gene = NULL){
   gene_res = gene_res %>%
     dplyr::mutate(p_transform = -1*log10(fdr + 0.0001)) # transform fdr
@@ -359,7 +359,7 @@ plot_volcano = function(gene_res, sig_color = "purple", test_name = "Significant
     xlab("rPTR (Posterior Mean)") +
     ylab("-log10(FDR)") +
     ggtitle(paste("Total # Extreme Gene Products:", ns_summary_across)) +
-    scale_color_manual(values = c("gray47", sig_color), guide = "none") +
+    scale_color_manual(values = c("slategray", sig_color), guide = "none") +
     scale_size_manual(values = c(2, 12), guide = "none") +
     scale_alpha_manual(values = c(0.45, 1), guide = "none") +
     theme(panel.background = element_rect(fill = 'white', color = "slategray4"),
@@ -376,9 +376,9 @@ plot_volcano = function(gene_res, sig_color = "purple", test_name = "Significant
       facet_wrap(~factor(ct, levels = c("EC", "PTM", "LC", "SPG", "SPC", "St")), ncol = ncol_facet) +
       xlab("rPTR (Posterior Mean)") +
       ylab("-log10(FDR)") +
-      ggtitle(paste("Total # Significant Gene Products:", ns_summary_across)) +
+      ggtitle(paste("Total # Significant Gene Products:", total_sig)) +
       scale_x_continuous(breaks = c(-2.5, 0, 2.5), labels = c("-2.5", "0", "2.5")) +
-      scale_color_manual(values = c("gray47", sig_color), guide = "none") +
+      scale_color_manual(values = c("slategray", sig_color), guide = "none") +
       scale_size_manual(values = c(2, 12), guide = "none") +
       scale_alpha_manual(values = c(0.45, 1), guide = "none") +
       theme(panel.background = element_rect(fill = 'white', color = "slategray4"),
@@ -390,7 +390,7 @@ plot_volcano = function(gene_res, sig_color = "purple", test_name = "Significant
 
 # plot mu + r by mu, with color corresponding to significant test results
 # one of "none", "mrna" or "protein" for posterior_interval (mrna or protein gives 95 pct mu and mu + r interval, respectively)
-plot_posterior_means = function(gene_res, posterior_interval = "none", facet_col = 3, sig_color = "purple", test_name = "Significant Nonzero", pass_text = 40, small = 3, big = 4.5){
+plot_posterior_means = function(gene_res, posterior_interval = "none", facet_col = 3, sig_color = "magenta3", test_name = "Significant Nonzero", pass_text = 40, small = 3, big = 4.5){
   # draw point plot with reference diagonal, line at zero
   g = ggplot() +
     geom_point(data = gene_res, mapping = aes(x = mu_av, y = prot_av, color = significant_fdr, size = significant_fdr, alpha = significant_fdr)) +
@@ -400,7 +400,7 @@ plot_posterior_means = function(gene_res, posterior_interval = "none", facet_col
     facet_wrap(~ct, ncol = facet_col) +
     xlab("mRNA Posterior Mean") +
     ylab("Protein Posterior Mean") +
-    scale_color_manual(values = c("gray47", sig_color), guide = "none", name = "Significant rPTR") +
+    scale_color_manual(values = c("slategray", sig_color), guide = "none", name = "Significant rPTR") +
     scale_size_manual(values = c(small, big), guide = "none") +
     scale_alpha_manual(values = c(0.45, 0.75), guide = "none") +
     theme(panel.background = element_rect(fill = 'white', color = "slategray4"),
@@ -437,19 +437,17 @@ plot_correlation_comparison_med = function(cor_comparison, gene_res, pass_text =
   
   # draw main plot
   g1 = ggplot() +
-    geom_point(data = cor_info, aes(y = param_cor, x = pop_cor, color = significant, 
-                                    size = significant, alpha = significant)) +
+    geom_point(data = cor_info, aes(y = param_cor, x = pop_cor, color = significant, alpha = significant, size = significant)) +
     geom_abline(color = "red") +
     geom_smooth(method = "lm", se = FALSE, color = "blue", alpha = 1) +
-    geom_text(aes(label = paste("Significant rPTR", "(One or More Cell Types)",
-                                sep = "\n")), x = 0.5, y = -0.75, size = 20) +
+    geom_text(aes(label = "Significant Gene Product"), x = 0.5, y = -0.75, size = 20) +
     xlab(paste("Across Clusters Correlation (Empirical)", " ", sep = "\n")) +
     ylab("Across Clusters Correlation (Model Fit)") +
     scale_x_continuous(limits=c(-1, 1), expand = c(0, 0)) +
     scale_y_continuous(limits=c(-1, 1), expand = c(0, 0)) +
-    scale_color_manual(values = c("gray47", "purple")) +
-    scale_alpha_manual(values = c(0.75, 1), guide = "none") +
-    scale_size_manual(values = c(4, 6), guide = "none") +
+    scale_color_manual(values = c("black", "magenta3")) +
+    scale_alpha_manual(values = c(0.6, 1), guide = "none") +
+    scale_size_manual(values = c(5, 7), guide = "none") +
     theme(panel.background = element_rect(fill = 'white', color = "slategray4"),
           panel.grid.major = element_line(color = 'slategray2'),
           panel.grid.minor = element_line(color = 'slategray1'),
@@ -461,33 +459,43 @@ plot_correlation_comparison_med = function(cor_comparison, gene_res, pass_text =
   # prepare data for marginal plot
   cor_info_piv = cor_comparison %>%
     merge(gene_res)
-  g2_lab = cor_info_piv %>% dplyr::group_by(significant) %>% dplyr::summarise(pop_med = median(pop_cor, na.rm = T),
-                                                                              lab = paste0("Median = ", round(pop_med, 2)),
-                                                                              x = pop_med,
-                                                                              y = 0.1)
+  cor_info_addon = cor_info_piv %>%
+    filter(significant == TRUE) %>%
+    dplyr::mutate(significant = F)
+  cor_info_piv = rbind(cor_info_piv, cor_info_addon)
+  g2_lab = cor_info_piv %>% dplyr::group_by(significant) %>% 
+    dplyr::summarise(pop_med = median(pop_cor, na.rm = T),
+                     lab = paste0("Median = ", round(pop_med, 2)),
+                     x = pop_med, y = 0.1)
   
-  g3_lab = cor_info %>% dplyr::group_by(significant) %>% dplyr::summarise(param_med = median(param_cor, na.rm = T),
-                                                                          y = 0.5, x = 3)
+  cor_info_sub = cor_info %>%
+    filter(significant == TRUE) %>%
+    dplyr::mutate(significant = F)
+  cor_info = rbind(cor_info, cor_info_sub)
+  g3_lab = cor_info %>% dplyr::group_by(significant) %>% 
+    dplyr::summarise(param_med = median(param_cor, na.rm = T), y = 0.5, x = 3)
   
   # draw marginal density plots
-  g2 = ggplot(data = cor_info_piv, mapping = aes(x = pop_cor, color = significant)) +
-    geom_density(data = cor_info_piv, mapping = aes(x = pop_cor, color = significant, fill = significant), alpha = 0.1) +
-    geom_vline(data = g2_lab, aes(xintercept = pop_med, color = significant)) +
+  g2 = ggplot(data = cor_info_piv, mapping = aes(x = pop_cor)) +
+    geom_density(data = cor_info_piv, mapping = aes(x = pop_cor, color = significant, fill = significant), 
+                 position = "stack", size = 4) +
+    # geom_vline(data = g2_lab, aes(xintercept = pop_med, color = significant), size = 2) +
     scale_x_continuous(limits=c(-1, 1), expand = c(0, 0), labels = NULL, breaks = NULL) +
-    scale_color_manual(values = c("gray47", "purple"), guide = "none") +
-    scale_fill_manual(values = c("gray47", "purple"), guide = "none") +
+    scale_color_manual(values = c("black", "magenta3"), guide = "none") +
+    scale_fill_manual(values = c("white", "magenta3"), guide = "none") +
     # xlab("") +
     ylab("") +
     labs(x = NULL) +
     theme_void()
   
   # marginal plot for fitted parameter
-  g3 = ggplot(data = cor_info, mapping = aes(y = param_cor, color = significant)) +
-    geom_density(data = cor_info, mapping = aes(y = param_cor, color = significant, fill = significant), alpha = 0.1) +
-    geom_hline(data = g3_lab, aes(yintercept = param_med, color = significant)) +
+  g3 = ggplot(data = cor_info, mapping = aes(y = param_cor)) +
+    geom_density(data = cor_info, mapping = aes(y = param_cor, color = significant, fill = significant), 
+                 position = "stack", size = 4) +
+    # geom_hline(data = g3_lab, aes(yintercept = param_med, color = significant), size = 2) +
     scale_y_continuous(limits=c(-1, 1), expand = c(0, 0)) +
-    scale_color_manual(values = c("gray47", "purple"), guide = "none", name = "Significant rPTR") +
-    scale_fill_manual(values = c("gray47", "purple"), guide = "none") +
+    scale_color_manual(values = c("black", "magenta3"), guide = "none", name = "Significant rPTR") +
+    scale_fill_manual(values = c("white", "magenta3"), guide = "none") +
     xlab("") +
     ylab("") +
     theme(panel.background = element_rect(fill = "transparent", colour = NA),
@@ -518,14 +526,15 @@ plot_correlation_comparison_med = function(cor_comparison, gene_res, pass_text =
 # table of posterior predictive statistics
 plot_ppc_stats = function(mrna_ppc_variance, protein_ppc_variance,
                           mrna_ppc_z, protein_ppc_z, mrna_obs_z, protein_obs_z,
-                          text_pass = 20){
+                          text_pass = 20, 
+                          n_10x = 2, n_ds = 3, n_sc = 4, n_mrna = 5, n_prot = 5){
   
   # link data sets to measurement techniques 
-  mrna_df_rec = data.frame(pop_label = paste0("mRNA Pop", 1:5),
-                           dataset = c(rep("10x", 2), rep("Drop-Seq", 3)))
+  mrna_df_rec = data.frame(pop_label = paste0("mRNA Pop", 1:n_mrna),
+                           dataset = c(rep("10x", n_10x), rep("Drop-Seq", n_ds)))
   
-  protein_df_rec = data.frame(pop_label = paste0("Protein Pop", 1:5),
-                              dataset = c(rep("SCoPE2", 4), "plexDIA"))
+  protein_df_rec = data.frame(pop_label = paste0("Protein Pop", 1:n_prot),
+                              dataset = c(rep("SCoPE2", n_sc), "plexDIA"))
   
   # labels related to pp variance
   mrna_ppc_variance = mrna_ppc_variance %>%

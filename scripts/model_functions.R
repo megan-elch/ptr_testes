@@ -99,7 +99,7 @@ model_prep = function(mrna_suff, protein_suff,
     # identify unique cell types in mrna data set for each gen
     mrna_cts = mrna_suff %>%
                dplyr::group_by(UNIPROT) %>%
-               dplyr::summarise(ct_m = unique(ct)) %>% # keeping track of number of cell types
+               dplyr::reframe(ct_m = unique(ct)) %>% # keeping track of number of cell types
                ungroup()
 
     # filter protein to make sure its observed in enough cell types, nonzero variance
@@ -116,7 +116,7 @@ model_prep = function(mrna_suff, protein_suff,
     # identify unique cell types in protein data set for each gen
     protein_cts = protein_suff %>%
                   dplyr::group_by(UNIPROT) %>%
-                  dplyr::summarise(ct_p = unique(ct)) %>% # keeping track of number of cell types
+                  dplyr::reframe(ct_p = unique(ct)) %>% # keeping track of number of cell types
                   ungroup()
 
     # keep proteins observed with enough cell types in both modalities

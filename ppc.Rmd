@@ -74,7 +74,7 @@ vv = plot_ppc_stats(mrna_ppc_variance, protein_ppc_variance,
                     text_pass = 30)
 
 vv
-vv %>% kableExtra::save_kable("figs_results/ppc_cover.pdf", density = 1000)
+# vv %>% kableExtra::save_kable("figs_results/ppc_cover.pdf", density = 1000)
 ```
 
 
@@ -83,7 +83,7 @@ vv %>% kableExtra::save_kable("figs_results/ppc_cover.pdf", density = 1000)
 #                                                 Plot posterior predictive correlation 
 ####################################################################################################################################### 
 # load previously computed posterior predictive correlations and observed correlations
-load("model_output/ppc_cor.RData")
+load("model_output_no3/ppc_cor.RData")
 
 # data frames that help with formatting/labeling
 mrna_df_rec = data.frame(pop_mrna = paste0("Pop", 1:5), adult = paste("Adult", 1:5),
@@ -96,16 +96,16 @@ protein_df_rec = data.frame(pop_protein = paste0("Pop", 1:5),
 ppc_cor = ppc_cor_obj$ppc_cor
 rm(ppc_cor_obj) 
 ppc_cor = ppc_cor %>% merge(mrna_df_rec) %>% merge(protein_df_rec) 
-save(ppc_cor, file = "model_output/ppc_cor_prepped.RData")
+save(ppc_cor, file = "model_output_no3/ppc_cor_prepped.RData")
 rm(ppc_cor)
 
 # reformat observed correlations  
-load("model_output/ppc_cor.RData")
+load("model_output_no3/ppc_cor.RData")
 obs_cor = ppc_cor_obj$obs_cor
 rm(ppc_cor_obj)
 obs_cor = obs_cor %>% merge(mrna_df_rec) %>% merge(protein_df_rec)
-save(obs_cor, file = "model_output/obs_cor_prepped.RData")
-load("model_output/ppc_cor_prepped.RData")
+save(obs_cor, file = "model_output_no3/obs_cor_prepped.RData")
+load("model_output_no3/ppc_cor_prepped.RData")
 
 # compute empirical cdf
 ppc_cor2 = ppc_cor %>% 
@@ -144,6 +144,6 @@ mp = ggplot() +
         axis.text = element_text(size = text_size),
         legend.text = element_text(margin = margin(r = 2, unit="inch"), size = text_size))
 
-ggsave(plot = mp, filename = "figs_results/ppc_cor.pdf", width = 40, height = 25, units = "in", limitsize = F)
+ggsave(plot = mp, filename = "figs_results_no3/ppc_cor.pdf", width = 40, height = 25, units = "in", limitsize = F)
 mp
 ```

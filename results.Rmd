@@ -15,16 +15,18 @@ library(viridis)
 library(ggridges)
 library(ggvenn)
 library(ggpubr)
+library(ggrepel)
 library(tidyverse)
 library(patchwork)
+library(ggbeeswarm)
 source("scripts/plot_functions.R")
 source("scripts/go_functions.R")
 clusters = c("EC", "PTM", "LC", "SPG", "SPC", "St")
 
-mrna_color = "#B2182B"
-protein_color = "#2166AC"
-multi_colors = "lightgray"
-
+mrna_color = "#2166AC"
+protein_color = "#B2182B"
+multi_colors = "slategray"
+sig_colors = "magenta3"
 text_size = 80
 ```
 
@@ -50,8 +52,18 @@ ggsave(plot = m1, filename = "figs_results/post_av.pdf", width = 22, height = 20
 ```
 
 ```{r fig2, echo = FALSE, warning = FALSE, message = FALSE, cache = F, fig.height = 35, fig.width = 30}
-# volcano plot of posterior mean of rptr with transformed poserior probability
-r1 = plot_volcano(gene_res, pass_text = text_size, ct_select = clusters, ncol_facet = 3, special_gene = uni_select) + 
+# compute fdrs and select gene product of interest
+uni_select = "P27797"
+gene_res = gene_res %>% 
+  dplyr::group_by(ct) %>%
+  arrange(p_r_scaled, .by_group = T) %>%
+  dplyr::mutate(fdr = cummean(p_r_scaled[order(p_r_scaled)]),
+                significant_fdr = fdr < 0.01,
+                significant = significant_fdr)
+total_sig = gene_res %>% dplyr::group_by(UNIPROT) %>% dplyr::summarise(sig = sum(significant) > 0) %>% pull(sig) %>% sum()
+
+# volcano plot of posterior mean of rptr with transformed posterior probability
+r1 = plot_volcano(gene_res, total_sig = total_sig, pass_text = text_size, ct_select = clusters, ncol_facet = 3, special_gene = uni_select) + 
   theme(legend.position = "bottom", 
         axis.ticks.x = element_line(color = "black", linewidth = 4),
         axis.ticks.length.x = unit(1, "cm"),
@@ -85,7 +97,6 @@ protein_obs_z = prep_list$protein %>%
   group_split(pop_protein)
 
 # gene of interest to show z transformed observed data and posterior intervals 
-uni_select = "P27797"
 p2 = plot_zscore_means(mrna_z = mrna_obs_z, protein_z = protein_obs_z, gene_res = gene_res,
                        uni = uni_select, clusters = clusters,
                        mrna_pop_label = c(rep("mRNA 10x", 2), rep("mRNA Drop-Seq", 3)),
@@ -116,14 +127,40 @@ ggsave(plot = mp[[3]], filename = "figs_results/supp_cor3.pdf", width = 7, heigh
 #                                                     Plot GO-level test results     
 ####################################################################################################################################### 
 # load go test results
-load("model_output/go_test_results_centered.RData")
+load("model_output/go_test_av.RData")
 
-# use posterior exclusions probability p_r to compute fdr
+# filter test results by observed values
+valid_groups = AnnotationDbi::select(org.Hs.eg.db, keys = unique(test_res$GO), keytype = "GO", columns = c("UNIPROT")) %>%
+  ungroup() %>%
+  dplyr::group_by(GO) %>%
+  dplyr::summarise(prop_present = mean(UNIPROT %in% unique(gene_res$UNIPROT))) %>%
+  ungroup() %>%
+  filter(prop_present >= 0.25) %>%
+  pull(GO) %>% unique()
+
+# record number of gene products present 
+ng_groups = AnnotationDbi::select(org.Hs.eg.db, keys = unique(test_res$GO), keytype = "GO", columns = c("UNIPROT")) %>%
+  ungroup() %>%
+  filter(UNIPROT %in% gene_res$UNIPROT) %>%
+  dplyr::group_by(GO) %>%
+  dplyr::summarise(ng = length(unique(UNIPROT))) %>%
+  ungroup() 
+
+# filter test results to valid groups
+test_res = test_res %>% filter(GO %in% valid_groups)
+
+# use posterior exclusion probability p_r to compute fdr
 test_res = test_res %>% 
   dplyr::group_by(ct) %>%
   arrange(p_r, .by_group = T) %>% # compute expected proportion of false discoveries for r, mu, mu + r
   dplyr::mutate(fdr = cummean(p_r[order(p_r)]), # expected proportion
                 significant_fdr = fdr <= 0.05)
+term_labels = test_res %>% dplyr::group_by(GO) %>%
+  dplyr::reframe(TERM = unique(TERM))
+go_rec = AnnotationDbi::select(org.Hs.eg.db, keys = unique(gene_res$UNIPROT), keytype = "UNIPROT", columns = c("GO")) %>%
+  filter(GO %in% test_res$GO) %>%
+  dplyr::select(UNIPROT, GO)
+save(test_res, file = "model_output/filtered_go_rptr_test.RData")
 
 # output significant groups and record of observed UNIPROT IDs associated
 gene_ref = AnnotationDbi::select(org.Hs.eg.db, keys = unique(test_res$GO), keytype = "GO", columns = c("UNIPROT")) %>%
@@ -134,65 +171,17 @@ write.csv(sig_groups, "figs_results/significant_go.csv", row.names=FALSE)
 ```
 
 ```{r fig9, echo = FALSE, warning = FALSE, message = FALSE, fig.width = 80, fig.height = 50, eval = T, cache = F}
-# selected terms for heatmap and tick mark plot
-TERMS = c("histone acetyltransferase activity", "mitochondrial respiratory chain complex III", 
-  "sperm flagellum", "valine catabolic process", "DNA methylation involved in gamete generation",
-  "double-strand break repair via nonhomologous end joining") #, "NAD+ kinase activity")
-GO_heatmap = test_res %>% filter(TERM %in% TERMS) %>% pull(GO) %>% unique()
-
-# plot heatmap
-b = plot_go_heatmap(test_res, go_select = GO_heatmap, TERM_abbrev = NULL, ct_select = "St") + 
-    xlab("Cell Type") +
-  theme(plot.title = element_text(size = text_size + 40),
-        text = element_text(size = text_size),
-        axis.text.y = element_text(size = text_size), #, angle = 90, hjust = 0.5, vjust = 0.5),
-        axis.text.x = element_text(size = text_size + 30),
-        axis.title = element_text(size = text_size + 30),
-        legend.position = "none",
-        legend.key.size = unit(4, "cm"))
-
-b
-ggsave(plot = b, filename = "figs_results/fig2_c.pdf", width = 35, height = 50, units = "in", limitsize = FALSE)
-
-# recover legend to include in plot separately
-b = plot_go_heatmap(test_res, go_select = GO_heatmap, TERM_abbrev = NULL, ct_select = "St") + 
-  theme(legend.position = "none",
-        legend.key.size = unit(4, "cm"))
-legend = cowplot::get_legend(b)
-ggsave(plot = legend, filename = "figs_results/fig2_legend.pdf", width = 4, height = 1, units = "in", limitsize = FALSE)
-
 # format cell type title
 celltype_title = c("Endothelial Cells", "Peritubular Myoid Cells", "Leydig Cells", "Spermatagonia Cells", "Spermatocyte Cells", "Spermatid Cells")
-load(paste0("model_output/GO_dat_", clusters[6], ".RData"))
 
-# plot tick marks: posterior mean of rptr for genes in each group
-d = plot_ticks(GO_dat = GO_dat, gene_res = test_res, GO_list = GO_heatmap,
-                celltype = clusters[6], celltype_title = celltype_title[6], 
-                TERM_abbrev = NULL, pass_text = text_size + 10)
+# selected terms for heatmap and tick mark plot
+TERMS = c("chaperone-mediated protein complex assembly", "histone methyltransferase activity (H3-K36 specific)",
+  "glycolytic process", "citrate metabolic process", "fatty acid beta-oxidation using acyl-CoA dehydrogenase",
+  "NADH dehydrogenase (ubiquinone) activity", "cytoplasmic translation", "double-strand break repair via break-induced replication")
+GO_heatmap = test_res %>% filter(TERM %in% TERMS) %>% pull(GO) %>% unique()
 
-ggsave(plot = d[[1]][[1]], filename = "figs_results/fig2_d1.pdf", 
-       width = 25, height = 10, units = "in", limitsize = FALSE)
-ggsave(plot = d[[1]][[2]], filename = "figs_results/fig2_d2.pdf", 
-       width = 25, height = 40, units = "in", limitsize = FALSE)
-ggsave(plot = d[[2]][[1]], filename = "figs_results/fig2_d3.pdf", 
-       width = 10, height = 10, units = "in", limitsize = FALSE)
-ggsave(plot = d[[2]][[2]], filename = "figs_results/fig2_d4.pdf", 
-       width = 10, height = 40, units = "in", limitsize = FALSE)
-```
-
-```{r fig11, echo = FALSE, warning = FALSE, message = FALSE, fig.width = 30, fig.height = 30, eval = T, cache = F}
-####################################################################################################################################### 
-#                                                     Run complex-level testing   
-####################################################################################################################################### 
-
-# complexes tested will be filtered by protein reliability:
-# load observed data and protein consistency
-load("processed_data/protein_consistency.RData")
-load("processed_data/prepped_data.RData")
-
-# load complex level posterior correlations
-load("model_output/complex_correlations.RData")
-# load complexes and associated UNIPROT IDs
+# load complex test results
+load("model_output/complex_test_av.RData")
 complex_uni =  read_delim("processed_data/coreComplexes.txt", 
     delim = "\t", escape_double = FALSE, 
     trim_ws = TRUE)
@@ -200,117 +189,662 @@ complex_uni = complex_uni %>%
   dplyr::group_by(ComplexName) %>% 
   dplyr::reframe(UNIPROT = unlist(strsplit(`subunits(UniProt IDs)`, ";", fixed = T)))
 
-# compute median protein consistency across data sets 
-group_ref = protein_reliability %>%
-  stats::na.omit() %>%
-  dplyr::group_by(UNIPROT) %>%
-  dplyr::summarise(rel_av = median(reliability, na.rm = T)) %>%
-  ungroup() 
-
-# z-transform protein data
-cor_df_prot_z = prep_list$protein %>%
-  dplyr::group_by(UNIPROT, ct, measure) %>%
-  dplyr::summarise(a_av = mean(pep_av, na.rm = T)) %>%
-  ungroup() %>%
-  dplyr::group_by(UNIPROT, measure) %>%
-  dplyr::mutate(a_av = scale(a_av)[,1],
-                pop_a = measure) %>%
-  dplyr::select(-measure) %>%
-  ungroup()
-
-# compute data set agreement for protein
-cor_df_prot = cor_df_prot_z %>%
-  merge(transmute(cor_df_prot_z, UNIPROT = UNIPROT, ct = ct, b_av = a_av, pop_b = pop_a)) %>%
-  filter(pop_a != pop_b) %>%
-  dplyr::group_by(UNIPROT, pop_a, pop_b) %>%
-  dplyr::summarise(cors = cor(a_av, b_av, use = "pairwise.complete.obs"))
-
-# combine data set agreement and protein consistency 
-protein_point = cor_df_prot %>% 
-  dplyr::transmute(cors = cors, UNIPROT = UNIPROT) %>%
-  ungroup() %>%
-  merge(group_ref, all = T) %>%
-  dplyr::group_by(UNIPROT) %>%
-  # compute average reliability per protein
-  dplyr::summarise(reliability = mean(c(rel_av, cors), na.rm = T)) %>%
-  ungroup() %>%
-  merge(complex_uni) %>%
-  # compute average reliability across subunits of complex
-  dplyr::group_by(ComplexName) %>%
-  dplyr::summarise(reliability = mean(reliability, na.rm = T))
+# select complexes of interest
+complex_labels = c("Emerin architectural complex", "PA28gamma-20S proteasome", "Large Drosha complex", "HRD1 complex",
+                   "TRBP containing complex (DICER, RPL7A, EIF6, MOV10 and subunits of the 60S ribosomal particle)", 
+                   "Intraflagellar transport complex B", "Kinase maturation complex 1", "MCM complex")
 
 # identify proportion of UNIPROT IDs assigned to each complex that are actually observed
-uni_rec = complex_uni %>% merge(gene_res, all.x = T) %>% dplyr::group_by(ComplexName) %>% dplyr::summarise(n_uni = length(unique(UNIPROT[is.finite(significant)])), n_uni_big = length(unique(UNIPROT)), prop_rep = n_uni/n_uni_big)
+uni_rec = complex_uni %>% merge(gene_res, all.x = T) %>% dplyr::group_by(ComplexName) %>% 
+  dplyr::summarise(n_uni = length(unique(UNIPROT[is.finite(significant)])), 
+                   n_uni_big = length(unique(UNIPROT)), prop_rep = n_uni/n_uni_big)
 
-# filtering to identify testable complexes based on reliability and a minimum of 25% representation
-testable_complexes = protein_point %>% merge(uni_rec) %>% filter(ComplexName %in% complex_correlations$ComplexName & prop_rep > 0.25) %>%
-  dplyr::mutate(rel_med = median(reliability, na.rm = T)) %>%
-  filter(reliability >= rel_med) %>% pull(ComplexName)
+# filtering to identify complexes with at least 25% subunits observed 
+testable_complexes = uni_rec %>% filter(prop_rep > 0.25) %>%
+  pull(ComplexName)
+test_res_complex = test_res_complex %>% filter(ComplexName %in% testable_complexes)
+save(test_res_complex, file = "model_output/filtered_complex_rptr_test.RData")
+
+# fdrs for complex level test
+complex_fdr = test_res_complex %>%
+  dplyr::group_by(ct) %>%
+  arrange(p_r, .by_group = T) %>% # compute expected proportion of false discoveries for r, mu, mu + r
+  dplyr::mutate(fdr = cummean(p_r[order(p_r)]), # expected proportion
+                significant_fdr = fdr <= 0.05) %>% 
+  ungroup() %>%
+  filter(ComplexName %in% complex_labels) %>%
+  dplyr::select(ComplexName, fdr, ct)
+
+# collect summary info for complex heatmap and tick mark plot
+complex_r_av = test_res_complex %>% 
+  filter(ComplexName %in% complex_labels) %>%
+  dplyr::group_by(ComplexName) %>%
+  dplyr::transmute(ct, r_av, r_av_st = r_av[ct == "St"]) %>%
+  ungroup() %>%
+  mutate(ComplexName_factor = forcats::fct_reorder(ComplexName, r_av_st, .desc = T),
+         type = "Protein Complex") %>%
+  merge(complex_fdr) %>%
+  arrange(ComplexName_factor)
+
+# collect summary info for go heatmap and tick mark plot
+go_r_av = test_res %>%
+  filter(GO %in% GO_heatmap) %>%
+  dplyr::transmute(ComplexName = TERM, r_av = r_av, ct, fdr) %>%
+  dplyr::group_by(ComplexName) %>%
+  dplyr::mutate(r_av_st = r_av[ct == "St"]) %>%
+  ungroup() %>%
+  mutate(ComplexName_factor = forcats::fct_reorder(ComplexName, r_av_st, .desc = T),
+         type = "GO Group") %>%
+  arrange(ComplexName_factor)
+
+# combine go and complex test results
+r_av_all = rbind(complex_r_av, go_r_av) %>%
+  dplyr::mutate(ct_factor = factor(ct, levels = clusters))
+complex_order = r_av_all %>%
+  dplyr::group_by(ComplexName_factor) %>%
+  dplyr::summarise(ComplexName = unique(ComplexName))
+
+# generate heatmap
+g = ggplot(data = r_av_all, mapping = aes(x = ct_factor, y = ComplexName_factor, fill = r_av)) +
+    geom_tile() +
+    facet_wrap(vars(type), ncol = 1, scales = "free_y") +
+    ylab("") +
+    xlab("Cell Type") +
+    ggtitle("Average rPTR (Posterior Mean)") +
+    scale_y_discrete(labels = function(y) str_wrap(y, width = 25)) +
+    scale_fill_gradientn(colors = c("darkblue", "blue", "white", "red", "darkred"),
+                         limits = c(-1, 1),
+                         oob = scales::squish,
+                         na.value = NA, name = "rPTR", labels = c(-1, "", 0, "", 1)) +
+    theme(panel.background = element_rect(fill = 'white', color = "white"),
+          panel.grid.major = element_line(color = 'white'),
+          panel.grid.minor = element_line(color = 'white'),
+          panel.spacing = unit(2, "lines"),
+          plot.title = element_text(size = text_size + 50),
+          axis.text.y = element_text(size = text_size), 
+          axis.text.x = element_text(size = text_size + 50),
+          axis.title = element_text(size = text_size + 50),
+          strip.text = element_blank(),
+          strip.background = element_rect(fill = "white", color = "white"),
+          legend.position = "none",
+          legend.key.size = unit(4, "cm"))
+# g
+ggsave(plot = g, filename = "figs_results/heatmap_all.pdf", width = 45, height = 70, units = "in", limitsize = FALSE)
+
+# prepare results for tick mark plots
+complex_r_tick = gene_res %>%
+  merge(complex_uni) %>% 
+  filter(ComplexName %in% complex_labels & ct == "St") %>%
+  dplyr::group_by(ComplexName) %>%
+  dplyr::mutate(complex_mean = mean(r_av, na.rm = T)) %>%
+  ungroup() %>%
+  transmute(UNIPROT, ct, r_av, ComplexName, complex_mean, type = "Protein Complex")
+
+# prepare go groups test results to plot with complexes
+complex_r_go = gene_ref %>%
+  filter(GO %in% GO_heatmap) %>%
+  merge(transmute(test_res, ct, GO, ComplexName = TERM, complex_mean = r_av)) %>%
+  merge(transmute(gene_res, ct, UNIPROT, ct, r_av, type = "GO Group")) %>%
+  filter(ct == clusters[6]) %>%
+  dplyr::select(-GO)
+uni_r_all = rbind(complex_r_tick, complex_r_go) %>%
+  merge(complex_order)
+
+# use min and max across genes associated with all groups to auto-set axis limits
+min_check = min(uni_r_all$r_av[is.finite(uni_r_all$r_av)], na.rm = T)
+max_check = max(uni_r_all$r_av[is.finite(uni_r_all$r_av)], na.rm = T)
+lim_val = max(abs(min_check), abs(max_check))
+  
+# draw tick mark plot
+bb =  ggplot() +
+    geom_point(data = uni_r_all, 
+               mapping = aes(x = r_av, y = ComplexName_factor, color = r_av, group = UNIPROT),
+               size = 60, stroke = 60, shape="|", alpha = 1) +
+    geom_point(data = uni_r_all, mapping = aes(x = complex_mean, y = ComplexName_factor, fill = complex_mean),
+               size = 30, stroke = 10, shape = 24, color = "black") +
+    geom_vline(xintercept = 0, color = "gray", linetype = "dashed", size = 2) +
+    facet_wrap(vars(type), ncol = 1, scales = "free_y") +
+    xlab("rPTR (Posterior Mean)") +
+    ylab("") +
+    xlim(-1*(lim_val), (lim_val)) +
+    scale_color_gradientn(colors = c("darkblue", "blue", "white", "red", "darkred"),
+                          limits = c(-1, 1),
+                          oob = scales::squish,
+                          na.value = NA, name = "", guide = "none") +
+    scale_fill_gradientn(colors = c("darkblue", "blue", "white", "red", "darkred"),
+                         limits = c(-1, 1),
+                         oob = scales::squish,
+                         na.value = NA, name = "", guide = "none") +
+    scale_y_discrete(labels = function(y) str_wrap(y, width = 25)) +
+    theme(panel.background = element_rect(fill = 'white', color = "white"),
+          panel.spacing = unit(2, "lines"),
+          legend.position = "bottom",
+          axis.text.y = element_blank(),
+          axis.text.x = element_text(size = text_size + 50),
+          axis.title = element_text(size = text_size + 50),
+          strip.text = element_blank(),
+          strip.background = element_rect(fill = "white", color = "white"),
+          panel.grid.major = element_line(color = 'slategray1'),
+          panel.grid.minor = element_line(color = 'white'))
+
+bb
+ggsave(plot = bb, filename = "figs_results/ticks_st.pdf", width = 30, height = 65, units = "in", limitsize = FALSE)
+
+# marginal table displaying posterior probability associated with each group
+tbl_df = r_av_all %>%
+    ungroup() %>%
+    filter(ct == "St") %>%
+    dplyr::group_by(ComplexName_factor, type) %>%
+    dplyr::summarise(Posterior_Probability = unique(fdr)) %>%
+    dplyr::mutate(Posterior_Probability = ifelse(round(Posterior_Probability, 5) == 0, 0.00001, Posterior_Probability)) %>%
+    distinct() %>%
+    dplyr::select(Posterior_Probability, ComplexName_factor, type) %>%
+    arrange(ComplexName_factor, .by_group = T)
+  
+# plot table 
+tbl = ggplot(tbl_df, aes(y = fct_inorder(ComplexName_factor), x = 1)) +
+    geom_text(mapping = aes(x = 1, y = fct_inorder(ComplexName_factor), 
+                            label = as.character(vaxedemic::scientific_10x(Posterior_Probability, digits = 0))), 
+              size = 50, parse = T) +
+    facet_wrap(vars(type), ncol = 1, scales = "free_y") +
+    xlab("") +
+    ylab("") +
+    theme(panel.background = element_rect(fill = 'white', color = "white"),
+          panel.spacing = unit(2, "lines"),
+          plot.title = element_text(hjust = 0.5),
+          axis.text.y = element_blank(),
+          axis.text.x = element_blank(),
+          panel.grid.major = element_line(color = 'white'),
+          panel.grid.minor = element_line(color = 'white'),
+          axis.ticks.x = element_blank(),
+          axis.ticks.y = element_blank(),
+          strip.text = element_blank(),
+          strip.background = element_rect(fill = "white", color = "white"))
+tbl
+ggsave(plot = tbl, filename = "figs_results/fdr_st.pdf", width = 10, height = 60, units = "in", limitsize = FALSE)
+
+# same tick mark plot for spermatocytes
+complex_r_tick = gene_res %>%
+  merge(complex_uni) %>% 
+  filter(ComplexName %in% complex_labels & ct == "SPC") %>%
+  dplyr::group_by(ComplexName) %>%
+  dplyr::mutate(complex_mean = mean(r_av, na.rm = T)) %>%
+  ungroup() %>%
+  transmute(UNIPROT, ct, r_av, ComplexName, complex_mean, type = "Protein Complex")
+
+# same plot for go groups
+complex_r_go = gene_ref %>%
+  filter(GO %in% GO_heatmap) %>%
+  merge(transmute(test_res, ct, GO, ComplexName = TERM, complex_mean = r_av)) %>%
+  merge(transmute(gene_res, ct, UNIPROT, ct, r_av, type = "GO Group")) %>%
+  filter(ct == clusters[5]) %>%
+  dplyr::select(-GO)
+
+# combine tick mark plots
+uni_r_all = rbind(complex_r_tick, complex_r_go) %>%
+  merge(complex_order)
+
+# set symmetric limits
+min_check = min(uni_r_all$r_av[is.finite(uni_r_all$r_av)], na.rm = T)
+max_check = max(uni_r_all$r_av[is.finite(uni_r_all$r_av)], na.rm = T)
+lim_val = max(abs(min_check), abs(max_check))
+  
+# draw tick mark plot
+bb =  ggplot() +
+    geom_point(data = uni_r_all, 
+               mapping = aes(x = r_av, y = ComplexName_factor, color = r_av, group = UNIPROT),
+               size = 60, stroke = 60, shape="|", alpha = 1) +
+    geom_point(data = uni_r_all, mapping = aes(x = complex_mean, y = ComplexName_factor, fill = complex_mean),
+               size = 30, stroke = 10, shape = 24, color = "black") +
+    geom_vline(xintercept = 0, color = "gray", linetype = "dashed", size = 2) +
+    facet_wrap(vars(type), ncol = 1, scales = "free_y") +
+    xlab("rPTR (Posterior Mean)") +
+    ylab("") +
+    xlim(-1*(lim_val), (lim_val)) +
+    scale_color_gradientn(colors = c("darkblue", "blue", "white", "red", "darkred"),
+                          limits = c(-1, 1),
+                          oob = scales::squish,
+                          na.value = NA, name = "", guide = "none") +
+    scale_fill_gradientn(colors = c("darkblue", "blue", "white", "red", "darkred"),
+                         limits = c(-1, 1),
+                         oob = scales::squish,
+                         na.value = NA, name = "", guide = "none") +
+    scale_y_discrete(labels = function(y) str_wrap(y, width = 25)) +
+    theme(panel.background = element_rect(fill = 'white', color = "white"),
+          panel.spacing = unit(2, "lines"),
+          legend.position = "bottom",
+          axis.text.y = element_blank(),
+          axis.text.x = element_text(size = text_size + 50),
+          axis.title = element_text(size = text_size + 50),
+          strip.text = element_blank(),
+          strip.background = element_rect(fill = "white", color = "white"),
+          panel.grid.major = element_line(color = 'slategray1'),
+          panel.grid.minor = element_line(color = 'white'))
+
+bb
+ggsave(plot = bb, filename = "figs_results/ticks_spc.pdf", width = 30, height = 65, units = "in", limitsize = FALSE)
+  
+# marginal table displaying posterior probability associated with each group
+tbl_df = r_av_all %>%
+    ungroup() %>%
+    filter(ct == "SPC") %>%
+    dplyr::group_by(ComplexName_factor, type) %>%
+    dplyr::summarise(Posterior_Probability = unique(fdr)) %>%
+    dplyr::mutate(Posterior_Probability = ifelse(round(Posterior_Probability, 5) == 0, 0.00001, Posterior_Probability)) %>%
+    distinct() %>%
+    dplyr::select(Posterior_Probability, ComplexName_factor, type) %>%
+    arrange(ComplexName_factor, .by_group = T)
+  
+# plot table 
+tbl = ggplot(tbl_df, aes(y = fct_inorder(ComplexName_factor), x = 1)) +
+    geom_text(mapping = aes(x = 1, y = fct_inorder(ComplexName_factor), 
+                            label = as.character(vaxedemic::scientific_10x(Posterior_Probability, digits = 0))), 
+              size = 50, parse = T) +
+    facet_wrap(vars(type), ncol = 1, scales = "free_y") +
+    xlab("") +
+    ylab("") +
+    theme(panel.background = element_rect(fill = 'white', color = "white"),
+          panel.spacing = unit(2, "lines"),
+          plot.title = element_text(hjust = 0.5),
+          axis.text.y = element_blank(),
+          axis.text.x = element_blank(),
+          panel.grid.major = element_line(color = 'white'),
+          panel.grid.minor = element_line(color = 'white'),
+          axis.ticks.x = element_blank(),
+          axis.ticks.y = element_blank(),
+          strip.text = element_blank(),
+          strip.background = element_rect(fill = "white", color = "white"))
+  
+tbl
+ggsave(plot = tbl, filename = "figs_results/fdr_spc.pdf", width = 10, height = 60, units = "in", limitsize = FALSE)
+```
+
+```{r fig11, echo = FALSE, warning = FALSE, message = FALSE, fig.width = 45, fig.height = 70, eval = T, cache = F}
+####################################################################################################################################### 
+#                                                          Complex-level testing   
+####################################################################################################################################### 
+# load complex level posterior correlations
+load("model_output/complex_test_corr.RData")
+load("model_output/gene_res.RData")
+load("model_output/within_complex_correlations_summary.RData")
+load("model_output/within_complex_correlations_summary_mrna.RData")
+load("model_output/posterior_signal.RData")
+posterior_signal = posterior_signal %>%
+  dplyr::group_by(UNIPROT) %>%
+  dplyr::mutate(pep = min(pep_cor_med, 1 - pep_cor_med)) %>%
+  ungroup() %>%
+  arrange(pep) %>%
+  dplyr::mutate(fdr = cummean(pep),
+                significant = fdr < 0.05)
+
+# identify proportion of UNIPROT IDs assigned to each complex that are actually observed
+uni_rec = complex_uni %>% merge(gene_res, all.x = T) %>% dplyr::group_by(ComplexName) %>% 
+  dplyr::summarise(n_uni = length(unique(UNIPROT[is.finite(significant)])), 
+                   n_uni_big = length(unique(UNIPROT)), prop_rep = n_uni/n_uni_big)
+
+# filtering to identify complexes with at least 25% subunits observed 
+testable_complexes = uni_rec %>% filter(ComplexName %in% complex_correlations$ComplexName & prop_rep > 0.25) %>%
+  pull(ComplexName)
 
 # test complexes: identify those with correlations systematically above or below the mean
 complex_test = complex_correlations %>%
   filter(ComplexName %in% testable_complexes) %>%
   dplyr::group_by(.iteration, .chain) %>%
-  dplyr::mutate(cor_av = mean(cor_go, na.rm = T), # average across complexes for each set of samples
-                cor_centered = cor_go - cor_av) %>% # center by above computed average
+  dplyr::mutate(cor_av = median(cor_complex, na.rm = T), # average across complexes for each set of samples
+                cor_centered = cor_complex - cor_av) %>% # center by above computed average
   ungroup() %>%
   dplyr::group_by(ComplexName) %>%
-  dplyr::summarise(prop_high = mean(cor_centered > 0), # proportion of samples with centered correlation above mean
-                   cor_med = median(cor_go),
-                   cor_med_centered = median(cor_centered),
-                   mrna_var = mean(mrna_var),
-                   prot_var = mean(prot_var)) %>%
+# proportion of samples with centered correlation above mean
+  dplyr::summarise(prop_high = mean(cor_centered > 0), 
+                   cor_med = median(cor_complex),
+                   cor_med_centered = median(cor_centered)) %>%
   ungroup() %>%
   dplyr::group_by(ComplexName) %>%
   dplyr::mutate(prop = min(prop_high, 1 - prop_high)) %>% # minimum of both tails to get PEP for two-sided test
   ungroup() %>% 
   arrange(prop) %>%
   mutate(fdr = cummean(prop), # compute fdr
-         significant = fdr < 0.05) # identify significance
+         significant = fdr < 0.05) # %>% # identify significance
 
 ####################################################################################################################################### 
-#                                                     Plot significant complexes
+#                                                     Run complex-level testing   
 ####################################################################################################################################### 
-# complexes selected for violin plot
-complex_labels = data.frame(ComplexName = c("Cell division cycle complex (CDC27, CDC16, ANAPC7)", "AP2 adaptor complex", 
-                    "Ubiquitin E3 ligase (SIAH1, SIP, SKP1A, TBL1X)", "Respiratory chain complex I (holoenzyme), mitochondrial",
-                   "DSS1 complex", "MTA2 complex", "SIN3 complex", "Toposome"),
-                   significant = rep(c(T, F), each = 4))
+load("model_output/go_test_corr.RData")
+load("model_output/within_go_correlations_summary.RData")
+load("model_output/within_go_correlations_summary_mrna.RData")
 
-# filter complex correlations to selected list
-complex_info_filtered = complex_correlations %>%
-  merge(complex_labels)
+# summary info for correlation test
+go_test = go_correlations %>%
+  filter(GO %in% valid_groups) %>%
+  dplyr::group_by(.iteration, .chain) %>%
+  dplyr::mutate(cor_av = median(go_cor, na.rm = T), # average across complexes for each set of samples
+                cor_centered = go_cor - cor_av) %>% # center by above computed average
+  ungroup() %>%
+  dplyr::group_by(GO) %>%
+# proportion of samples with centered correlation above mean
+  dplyr::summarise(prop_high = mean(cor_centered > 0), 
+                   cor_med = median(go_cor),
+                   cor_med_centered = median(cor_centered)) %>%
+  ungroup() %>%
+  dplyr::group_by(GO) %>%
+  dplyr::mutate(prop = min(prop_high, 1 - prop_high)) %>% # minimum of both tails to get PEP for two-sided test
+  ungroup() %>% 
+  arrange(prop) %>%
+  mutate(fdr = cummean(prop), # compute fdr
+         significant = fdr < 0.05) %>%
+  merge(term_labels)
+# save(go_test, file = "model_output/filtered_go_corr_test.RData")
 
-complex_summary_filtered = complex_test %>% 
-    merge(complex_labels) %>%
-    mutate(ComplexName_factor = forcats::fct_reorder(ComplexName, cor_med))
+####################################################################################################################################### 
+#                                                     Plot significant correlations
+####################################################################################################################################### 
+# select complexes of interest
+complex_labels = c("Intraflagellar transport complex A", "SELK multiprotein complex", "BBS-chaperonin complex",
+                    "Oligosaccharyltransferase complex (Stt3B variant)", "Respiratory chain complex I (holoenzyme), mitochondrial",
+                    "PA700-20S-PA28 complex")
 
-complex_info_filtered = complex_summary_filtered %>% select(ComplexName, ComplexName_factor) %>%
-  merge(complex_info_filtered)
-complex_av = complex_correlations %>% pull(cor_go) %>% median()
+# select go groups of interest
+go_terms = c("pyruvate metabolic process", "cortical cytoskeleton", "very long-chain fatty acid metabolic process",
+             "alternative mRNA splicing, via spliceosome", "enoyl-CoA hydratase activity",
+             "positive regulation of establishment of protein localization to telomere")
+# map go names to labels
+go_labels = go_test %>% filter(TERM %in% go_terms) %>% pull(GO) %>% unique()
+term_df = test_res %>% filter(GO %in% go_labels) %>% dplyr::group_by(GO) %>% dplyr::summarise(TERM = unique(TERM)) %>% 
+  transmute(group = GO, TERM)
 
-# draw violin plot
-g = ggplot() +
-  geom_violin(data = complex_correlations, aes(y = cor_go, x = "All Complexes", fill = "All Complexes")) +
-  geom_point(aes(y = complex_av, x = "All Complexes"), size = 20) +
-  geom_violin(data = complex_info_filtered, aes(y = cor_go, x = ComplexName_factor, fill = significant)) +
-  geom_point(data = complex_summary_filtered, aes(y = cor_med, x = ComplexName_factor), size = 20) +
-  scale_x_discrete(labels = function(x) str_wrap(x, width = 20)) +
-  scale_fill_manual(values = c("lightgray", "gray47", "purple")) +
-  ylab("Across Clusters Correlation of Complex Mean") +
+# combine complex, go correlations with within group correlation info
+group_points = transmute(complex_test, group = ComplexName, group_cor = cor_med, significant, type = "complex") %>%
+  rbind(transmute(go_test, group = GO, group_cor = cor_med, significant, type = "go")) %>%
+  merge(transmute(rbind(within_go_correlations, within_complex_correlations), 
+                  group = gene_group, within_med = cor_med, within_mean = cor_mean)) %>%
+  merge(transmute(rbind(within_go_correlations_mrna, within_complex_correlations_mrna), 
+                  group = gene_group, mrna_within_med = cor_med, mrna_within_mean = cor_mean)) %>%
+  dplyr::mutate(type_f = factor(type, levels = c("go", "complex")))
+
+# all groups tested
+all_groups = unique(group_points$group)
+
+# do some subsetting (will be useful later)
+# select groups in complex and go lists of interest
+group_sub = group_points %>% filter(group %in% c(go_labels, complex_labels))
+# go groups only 
+group_sub2 = group_sub %>% filter(type == "go") %>% merge(term_df) %>% mutate(group = TERM) %>% dplyr::select(-TERM)
+# protein complexes only
+group_sub = group_sub %>% filter(type == "complex") %>% rbind(group_sub2)
+
+# all points not in selected groups
+group_points = group_points %>% 
+  filter(group %in% setdiff(all_groups, c(go_labels, complex_labels)))
+
+# summary info for complexes of interest
+complex_summary = transmute(complex_test, group = ComplexName, type = "complex", cor_med) %>%
+  filter(group %in% complex_labels) %>%
+  mutate(group_factor = forcats::fct_reorder(group, cor_med, .desc = T))
+
+# summary info for go groups of interest 
+group_summary = go_test %>% 
+  filter(GO %in% go_labels) %>%
+  transmute(group = TERM, type = "go", cor_med) %>%
+  mutate(group_factor = forcats::fct_reorder(group, cor_med, .desc = T)) %>%
+  rbind(complex_summary) %>%
+  dplyr::mutate(type_f = factor(type, levels = c("go", "complex")))
+
+# set letters to display groups of interest
+go_letters = LETTERS[1:length(go_terms)]
+complex_letters = LETTERS[(length(go_terms) + 1):(length(go_terms) + length(complex_labels))]
+group_letters = group_summary %>%
+  dplyr::group_by(group_factor, type_f) %>%
+  dplyr::reframe(group = unique(group)) %>%
+  ungroup() %>%
+  dplyr::group_by(type_f) %>%
+  dplyr::mutate(group_lab = ifelse(type_f == "go", go_letters[order(group_factor, decreasing = T)],
+                                   complex_letters[order(group_factor, decreasing = T)])) %>%
+  ungroup()
+group_sub = group_sub %>% merge(group_letters)
+
+# order groups
+group_order = group_summary %>%
+  dplyr::group_by(group_factor) %>%
+  dplyr::reframe(group = unique(group)) %>%
+  ungroup()
+
+# plot within group correlation by across modality correlation 
+g = ggplot(group_points) +
+  geom_point(aes(x = within_mean, y = group_cor), size = 5, alpha = 0.65) +
+  geom_point(data = group_sub, aes(x = within_mean, y = group_cor), color = "magenta3", size = 15) +
+  geom_label_repel(data = group_sub, aes(x = within_mean, y = group_cor, label = group_lab), 
+            size = 35, color = "magenta3", fontface = "bold", point.size = 12) +
+  geom_abline(color = "red", size = 2) +
+  scale_y_continuous(n.breaks = 6, expand = c(0, 0.13)) +
+  facet_wrap(vars(type_f), ncol = 1) +
   xlab("") +
-  ylim(-1, 1) +
-  theme(text = element_text(size = text_size + 20),
-        axis.text.x = element_text(size = text_size + 20, angle = 50, hjust = 1, vjust = 1),
-        axis.text.y = element_text(size = text_size + 20),
-        axis.title.x = element_text(size = text_size + 20),
-        axis.title.y = element_text(size = text_size + 8),
+  ylab("") +
+  theme(text = element_text(size = text_size + 60),
+        axis.text.x = element_text(size = text_size + 60),
+        axis.text.y = element_text(size = text_size + 60),
+        axis.title.x = element_text(size = text_size + 50),
+        axis.title.y = element_text(size = text_size + 50),
+        legend.title = element_text(size = text_size + 50),
         panel.background = element_rect(fill = 'white', color = "slategray4"),
         panel.grid.major = element_line(color = 'slategray2'),
         panel.grid.minor = element_line(color = 'slategray1'),
-        legend.position = "none")
+        panel.spacing = unit(20, "lines"),
+        plot.margin = margin(2, 2, 2, 2, "cm"),
+        legend.position = "none",
+        strip.text = element_blank(),
+        strip.background = element_rect(fill = "white", color = "white"))
 
-g
+ggsave(plot = g, filename = paste0("figs_results/complex_points.pdf"), 
+       height = 50, width = 50, units = "in", limitsize = FALSE)
+
+# recover posterior interval for correlation for relevant groups
+complex_cor_intervals = posterior_signal %>%
+  merge(complex_uni) %>%
+  filter(ComplexName %in% complex_labels) %>%
+  dplyr::transmute(UNIPROT, group = ComplexName, cor_mean, cor_lwr, cor_upr, significant, type = "complex") 
+
+# map go groups to uniprot ids
+go_uni_ids = AnnotationDbi::select(org.Hs.eg.db, keys = go_labels, keytype = "GO", columns = c("UNIPROT")) %>%
+  filter(UNIPROT %in% posterior_signal$UNIPROT) %>%
+  dplyr::select(UNIPROT, GO)
+# gene level correlation info 
+group_cor_intervals = posterior_signal %>%
+  merge(go_uni_ids) %>%
+  merge(term_labels) %>%
+  dplyr::transmute(UNIPROT, group = TERM, cor_mean, cor_lwr, cor_upr, significant, type = "go") %>%
+  rbind(complex_cor_intervals) %>%
+  dplyr::mutate(type_f = factor(type, levels = c("go", "complex"))) %>%
+  merge(group_order) 
+
+# gene level summary info
+all_intervals = posterior_signal %>%
+  dplyr::mutate(all_y = "All Complexes",
+                type = "complex")
+all_intervals = mutate(all_intervals, type = "go", all_y = "All GO Groups") %>% rbind(all_intervals) %>% dplyr::mutate(type_f = factor(type, levels = c("go", "complex")))
+
+all_summary = all_intervals %>%
+  dplyr::group_by(type_f, all_y) %>%
+  dplyr::summarise(group_med = median(cor_mean, na.rm = T))
+
+# draw violin plot
+g = ggplot() +
+  geom_violin(data = all_intervals, aes(x = cor_mean, y = all_y), 
+              scale = "width", draw_quantiles = 0.5, size = 2) +
+  geom_vline(data = all_summary, aes(xintercept = group_med), linetype = "longdash", size = 2) +
+  geom_violin(data = group_cor_intervals, aes(x = cor_mean, y = group_factor),
+              scale = "width", draw_quantiles = 0.5, size = 2) +
+  geom_beeswarm(data = group_cor_intervals, aes(x = cor_mean, y = group_factor), size = 10, cex = 1) +
+  facet_wrap(vars(type_f), ncol = 1, scales = "free_y") +
+  scale_y_discrete(labels = function(x) str_wrap(x, width = 35)) +
+  xlab("mRNA-Protein Correlation") +
+  ylab("") +
+  xlim(-1, 1) +
+  theme(text = element_text(size = text_size + 60),
+        axis.text.x = element_text(size = text_size + 60),
+        axis.text.y = element_text(size = text_size),
+        axis.title.x = element_text(size = text_size + 60),
+        panel.background = element_rect(fill = 'white', color = "slategray4"),
+        panel.grid.major = element_line(color = 'slategray2'),
+        panel.grid.minor = element_line(color = 'slategray1'),
+        panel.spacing = unit(10, "lines"),
+        legend.position = "none",
+        strip.text = element_blank(),
+        strip.background = element_rect(fill = "white", color = "white"))
+
 ggsave(plot = g, filename = paste0("figs_results/complex_violin.pdf"), 
-       width = 90, height = 42, units = "in", limitsize = FALSE)
+       height = 50, width = 50, units = "in", limitsize = FALSE)
+
+# summary info for rptr among groups with significant correlation 
+load("model_output/go_test_av.RData")
+test_res = test_res %>% filter(GO %in% valid_groups)
+
+load("model_output/complex_test_av.RData")
+complex_r_av = test_res_complex %>% 
+  filter(ComplexName %in% complex_labels) %>%
+  dplyr::transmute(ct, r_av, group = ComplexName, type = "complex") %>%
+  ungroup() 
+
+go_r_av = test_res %>%
+  filter(GO %in% go_labels) %>%
+  dplyr::transmute(group = TERM, r_av = r_av, ct, type = "go") 
+
+# combine go groups and complexes
+r_av_all = rbind(complex_r_av, go_r_av) %>%
+  merge(group_order) %>%
+  dplyr::mutate(ct_factor = factor(ct, levels = clusters),
+                type_f = factor(type, levels = c("go", "complex")))
+
+r_av_all_proteins = test_res %>%
+  dplyr::transmute(group = TERM, r_av = r_av, ct, type = "go", all_y = "All GO Groups") %>%
+  rbind(transmute(test_res_complex, group = ComplexName, r_av, ct, type = "complex", all_y = "All Complexes")) %>%
+  dplyr::group_by(ct, type, all_y) %>%
+  dplyr::summarise(r_av = mean(r_av)) %>%
+  ungroup() %>%
+  dplyr::mutate(ct_factor = factor(ct, levels = clusters),
+                type_f = factor(type, levels = c("go", "complex")))
+
+# generate heatmap
+g = ggplot() +
+    geom_tile(data = r_av_all, mapping = aes(x = ct_factor, y = group_factor, fill = r_av)) +
+    geom_tile(data = r_av_all_proteins, mapping = aes(x = ct_factor, y = all_y, fill = r_av)) +
+    facet_wrap(vars(type_f), ncol = 1, scales = "free_y") +
+    ylab("") +
+    xlab("Cell Type") +
+    # ggtitle("Average rPTR (Posterior Mean)") +
+    scale_y_discrete(labels = function(y) str_wrap(y, width = 25)) +
+    scale_fill_gradientn(colors = c("darkblue", "blue", "white", "red", "darkred"),
+                         limits = c(-1, 1),
+                         oob = scales::squish,
+                         na.value = NA, name = "rPTR", labels = c(-1, "", 0, "", 1)) +
+    theme(panel.background = element_rect(fill = 'white', color = "white"),
+          panel.grid.major = element_line(color = 'white'),
+          panel.grid.minor = element_line(color = 'white'),
+          panel.spacing = unit(10, "lines"),
+          axis.text.y = element_blank(), 
+          axis.text.x = element_text(size = text_size + 80),
+          axis.title = element_text(size = text_size + 80),
+          strip.text = element_blank(),
+          strip.background = element_rect(fill = "white", color = "white"),
+          legend.position = "none",
+          legend.key.size = unit(4, "cm"))
+g
+ggsave(plot = g, filename = "figs_results/heatmap_corr.pdf", width = 35, height = 70, units = "in", limitsize = FALSE)
+
+# reload correlation info for new plot 
+load("model_output/go_test_corr.RData")
+load("model_output/complex_test_corr.RData")
+
+# go level correlation info 
+group_correlations = go_correlations %>%
+  merge(term_labels) %>%
+  transmute(group = TERM, group_cor = go_cor, .iteration, .chain, type = factor("go", levels = c("go", "complex")), ylabel = "All GO Groups") %>%
+  rbind(transmute(complex_correlations, group = ComplexName, group_cor = cor_complex, 
+                  .iteration, .chain, type = factor("complex", levels = c("go", "complex")), ylabel = "All Protein Complexes"))
+
+# summarise group correlations
+group_correlations_summary = group_correlations %>%
+  dplyr::group_by(type, ylabel) %>%
+  dplyr::summarise(cor_med = median(group_cor))
+
+# filter to groups of interest
+group_correlations_filtered = group_correlations %>%
+  merge(group_order)
+
+# summarise groups of interest
+group_correlations_filtered_summary = group_correlations_filtered %>%
+  dplyr::group_by(group_factor, type) %>%
+  dplyr::summarise(cor_med = median(group_cor))
+
+# draw violin plot of posterior correlation distribution 
+g = ggplot() +
+  geom_violin(data = group_correlations, aes(x = group_cor, y = ylabel),
+              scale = "width") +
+  geom_point(data = group_correlations_summary, aes(x = cor_med, y = ylabel), size = 20) +
+  geom_vline(data = group_correlations_summary, aes(xintercept = cor_med), linetype = "longdash", size = 1) +
+  geom_violin(data = group_correlations_filtered, aes(x = group_cor, y = group_factor),
+              scale = "width") +
+  geom_point(data = group_correlations_filtered_summary, aes(x = cor_med, y = group_factor), size = 20) +
+  scale_y_discrete(labels = function(x) str_wrap(x, width = 30)) +
+  facet_wrap(vars(type), ncol = 1, scales = "free_y") +
+  xlab("mRNA-Protein Correlation") +
+  ylab("") +
+  xlim(-1, 1) +
+  theme(text = element_text(size = text_size + 60),
+        axis.text.x = element_text(size = text_size + 60),
+        axis.text.y = element_text(size = text_size),
+        axis.title.x = element_text(size = text_size + 60),
+        panel.background = element_rect(fill = 'white', color = "slategray4"),
+        panel.grid.major = element_line(color = 'slategray2'),
+        panel.grid.minor = element_line(color = 'slategray1'),
+        panel.spacing = unit(10, "lines"),
+        legend.position = "none",
+        strip.text = element_blank(),
+        strip.background = element_rect(fill = "white", color = "white"))
+ggsave(plot = g, filename = paste0("figs_results/complex_violin_iter.pdf"),
+       height = 50, width = 45, units = "in", limitsize = FALSE)
+
+# summarise gene level correlations 
+mu_prot_av_med = median(all_intervals$cor_mean, na.rm = T)
+all_intervals_full = all_intervals %>%
+  transmute(UNIPROT, cor_mean, type_f = factor("go", levels = c("go", "complex")), ylabel = "All GO Groups") %>%
+  rbind(transmute(all_intervals, UNIPROT, cor_mean, type_f = factor("complex", levels = c("go", "complex")), ylabel = "All Protein Complexes"))
+group_cor_summary = group_cor_intervals %>%
+  dplyr::group_by(group_factor, type_f) %>%
+  dplyr::summarise(group_median = median(cor_mean)) %>%
+  dplyr::mutate(type = type_f)
+
+# draw tick mark plot
+g =  ggplot() +
+     geom_violin(data = all_intervals_full, mapping = aes(x = cor_mean, y = "All")) +
+     geom_point(data = group_cor_intervals, mapping = aes(x = cor_mean, y = group_factor,
+                                             color = cor_mean, group = UNIPROT),
+               size = 50, stroke = 50, shape="|", alpha = 1) +
+    geom_point(data = group_cor_summary, mapping = aes(x = group_median, y = group_factor, fill = group_median),
+               size = 30, stroke = 10, shape = 24, color = "black") +
+    geom_vline(xintercept = mu_prot_av_med, color = "black", linetype = "dashed") +
+    xlim(-1, 1) +
+    xlab("Gene Product mRNA-Protein Correlation") +
+    facet_wrap(vars(type), ncol = 1, scales = "free_y") +
+    scale_color_gradientn(colors = c("darkblue", "blue", "white", "red", "darkred"),
+                          limits = c(-1, 1),
+                          oob = scales::squish,
+                          na.value = NA, name = "", guide = "none") +
+    scale_fill_gradientn(colors = c("darkblue", "blue", "white", "red", "darkred"),
+                          limits = c(-1, 1),
+                          oob = scales::squish,
+                          na.value = NA, name = "", guide = "none") +
+    theme(panel.background = element_rect(fill = 'white', color = "white"),
+          legend.position = "bottom",
+          axis.text.x = element_text(size = text_size + 40),
+          axis.text.y = element_blank(),
+          axis.title.x = element_text(size = text_size + 37),
+          axis.title.y = element_blank(),
+          panel.spacing = unit(10, "lines"),
+          strip.text = element_blank(),
+          strip.background = element_rect(fill = "white", color = "white"),
+          panel.grid.major = element_line(color = 'slategray1'),
+          panel.grid.minor = element_line(color = 'white'))
+  
+  ggsave(plot = g, filename = paste0("figs_results/complex_ticks_iter.pdf"),
+       height = 50, width = 30, units = "in", limitsize = FALSE)
 ```
