@@ -2,7 +2,7 @@ library(tidyverse)
 library(AnnotationDbi)
 library(GO.db)
 library(org.Hs.eg.db)
-
+ 
 load("model_output/gene_res.RData")
 
 # recover go groups associated with proteins fit in model

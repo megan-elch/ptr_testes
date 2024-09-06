@@ -26,7 +26,7 @@ peptides_pop4 = read.table(paste0("data/", project_name, "/scProtein/Pop4/testis
                            sep = '\t', header = TRUE)
 peptides_pop5 = read.table(paste0("data/", project_name, "/scProtein/Pop5/testis_nPoP.130124_peptideLevelMatrix_BC.txt"), 
                            sep = '\t', header = TRUE)
-
+ 
 colnames(peptides_pop1) = ifelse(colnames(peptides_pop1) == "prot", "prot", ifelse(colnames(peptides_pop1) == "pep", "pep", paste0("One_", colnames(peptides_pop1))))
 colnames(peptides_pop2) = ifelse(colnames(peptides_pop2) == "prot", "prot", ifelse(colnames(peptides_pop2) == "pep", "pep", paste0("Two_", colnames(peptides_pop2))))
 colnames(peptides_pop3) = ifelse(colnames(peptides_pop3) == "prot", "prot", ifelse(colnames(peptides_pop3) == "pep", "pep", paste0("Three_", colnames(peptides_pop3))))

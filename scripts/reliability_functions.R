@@ -5,7 +5,7 @@ compute_protein_consistency = function(df, df_info, protein_label = "prot", pept
   df[["pep"]] = df[[peptide_label]]
   cells = intersect(df_info$id, colnames(df))
   
-  set.seed(seed_id)
+  set.seed(seed_id) 
   # assign peptides to group a
   df_group_a = df %>% 
     dplyr::group_by(UNIPROT) %>%
