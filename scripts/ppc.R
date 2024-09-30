@@ -31,12 +31,12 @@ fit_mrna_gq$save_object(file = paste0(ppc_path, "mrna_gq.rds"))
 # extract mrna pp draws, format
 mrna_ppc = as_draws_df(fit_mrna_gq$draws()) %>%
   pivot_longer(cols = setdiff(colnames(.), c(".iteration", ".chain", ".draw")), values_to = "mrna_sum_rep") %>%
-  dplyr::transmute(mrna_sum_rep = mrna_sum_rep, .chain = .chain, .iteration = .iteration,
+  dplyr::transmute(mrna_sum_rep, .chain, .iteration,
                    mrna_obs_id = unlist(str_extract_all(name, "\\[[^()]+\\]"))) %>%
   dplyr::mutate(mrna_obs_id = substring(mrna_obs_id, 2, nchar(mrna_obs_id)-1)) %>%
-  merge(transmute(prep_list$mrna, UNIPROT = UNIPROT, ct = ct, SYMBOL = SYMBOL,
-                  n_cells = n_cells, mrna_sum = mrna_sum, scaled_counts = mrna_sum/counts,
-                  counts = counts, pop_mrna = pop_mrna, mrna_obs_id = row_number())) %>%
+  merge(transmute(prep_list$mrna, UNIPROT, ct, SYMBOL,
+                  n_cells, mrna_sum, scaled_counts = mrna_sum/counts,
+                  counts, pop_mrna)) %>%
   dplyr::mutate(mrna_bar_rep = mrna_sum_rep/counts,
                 mrna_bar_rep_counts = mrna_sum_rep/counts)
 save(mrna_ppc, file = paste0(ppc_path, "mrna_ppc.RData"))
@@ -62,11 +62,11 @@ rm(fit)
 # extract protein pp draws, format
 protein_ppc = as_draws_df(fit_protein_gq$draws()) %>%
   pivot_longer(cols = setdiff(colnames(.), c(".iteration", ".chain", ".draw")), values_to = "protein_bar_rep") %>%
-  dplyr::transmute(protein_bar_rep = protein_bar_rep, .chain = .chain, .iteration = .iteration,
+  dplyr::transmute(protein_bar_rep, .chain, .iteration,
                    protein_obs_id = unlist(str_extract_all(name, "\\[[^()]+\\]"))) %>%
   dplyr::mutate(protein_obs_id = substring(protein_obs_id, 2, nchar(protein_obs_id)-1)) %>%
-  merge(mutate(prep_list$protein, protein_obs_id = as.character(row_number())))
-save(protein_ppc, file = paste0(ppc_path, "protein_ppc_prior.RData"))
+  merge(mutate(prep_list$protein))
+save(protein_ppc, file = paste0(ppc_path, "protein_ppc.RData"))
 rm(fit_protein_gq)
 
 # compute z scores of protein pp draws and output summary

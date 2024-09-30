@@ -158,12 +158,14 @@ model_prep = function(mrna_suff, protein_suff,
     # celltype mapping, population mapping
     protein_suff_sample = merge(protein_suff, UNIPROT_map) %>% # merge to remove all filtered out obs
                           arrange(pop_protein) %>%
-                          mutate(ct_factor = as.numeric(factor(ct, levels = clusters))) # make factor for cell type ids
+                          mutate(ct_factor = as.numeric(factor(ct, levels = clusters)),
+                                 protein_obs_id = as.character(row_number())) # make factor for cell type ids
     print(paste("Number of Peptide Observations:", nrow(protein_suff_sample)))
          
     mrna_suff_sample = merge(mrna_suff, UNIPROT_map) %>%
                        arrange(pop_mrna) %>%
-                       mutate(ct_factor = as.numeric(factor(ct, levels = clusters)))
+                       mutate(ct_factor = as.numeric(factor(ct, levels = clusters)),
+                              mrna_obs_id = as.character(row_number()))
                        
     print(paste("Number of mRNA Observations:", nrow(mrna_suff_sample)))
     # output list with prepared data sets
