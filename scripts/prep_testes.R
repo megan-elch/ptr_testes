@@ -57,6 +57,11 @@ print(paste0("Number of Peptides ", n_peptides))
 n_cells_p = length(protein_info$id) 
 print(paste0("Number of Cells (Proteins) ", n_cells_p))
 
+# we input transcript count sums and log2 peptide intensity averages for each gene product, data set, cluster.
+# since Stan does not accept NAs, we must flatten data into one long vector for each modality and remove NAs
+# during prep steps we will also generate reference vectors that map our observations to corresponding data sets,
+# cluster labels etc (see testes.R)
+
 # compute summary statistics for protein data (peptide level averages for each cluster and data set)
 protein_suff_pop1 = compute_suff_stats(peptides_pop1, protein_pop1_info, type = "protein", clusters = clusters, pop_label = "Pop1") %>%
     dplyr::mutate(measure = "scope")

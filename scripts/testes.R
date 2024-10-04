@@ -16,7 +16,9 @@ load(paste0("data/suff_stats.RData"))
 # ############################################################################
 # ############################ MODEL PREP AND EDA ############################ 
 # ############################################################################
-# run model prep
+# run model prep: since Stan is not compatible with missing data, transcript sums and
+# peptide averages are flattened into one long vector and are accompanied by reference vectors
+# mapping each entry to corresponding data set, gene product, cluster...etc
 prep_list = model_prep(mrna_suff, protein_suff, n_protein = 5, n_mrna = 5, clusters = clusters)
 save(prep_list, file = paste0(output_path, "prepped_data.RData"))
 
@@ -25,7 +27,8 @@ file <- file.path(cmdstan_path(), "hs.stan")
 mod <- cmdstan_model(file)
 mod$print()
 
-# prepare stan input
+# prepare stan input: put prepped data into list format, along with necessary 
+# data block values (ex: total number of gene products, number of data sets for each modality...etc)
 stan_data = output_stan_data(prep_list)
 
 # run model and save output to output_path
